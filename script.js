@@ -128,6 +128,15 @@
         }
     }
 
+    // 방송사 로고/썸네일 등 외부 도메인 이미지를 로컬 캐시 경유로 서빙하는 URL을 만든다.
+    // /api/webview/logo-cache는 화이트리스트 등록이 필요 없고(위험도가 낮은 이미지 전용),
+    // 서버가 URL당 최초 1회만 원본을 받아 WebP로 변환해 로컬 캐싱한 뒤 그대로 서빙한다.
+    // mixed-content(https 페이지에서 http 이미지)나 로고 도메인의 hotlink 차단도 함께 우회된다.
+    function logoCacheUrl(rawUrl) {
+        if (!rawUrl) return '';
+        return `/api/webview/logo-cache?url=${encodeURIComponent(rawUrl)}`;
+    }
+
     function bindEvents() {
         openSourceModalBtn.addEventListener('click', openSourceModal);
         closeSourceModalBtn.addEventListener('click', () => sourceModal.classList.add('hidden'));
@@ -264,11 +273,14 @@
     }
 
     // 📄 텍스트 파일(M3U/EPG) 조회: 직접 fetch를 우선 시도하고, 실패하면
-    // 코어가 제공하는 window.BookOasisPlugin.getProxyUrl()로 재시도한다.
+    // 코어가 제공하는 window.BookOasisPlugin.getProxyUrl()(/api/webview/proxy 경유)로 재시도한다.
     // (공개 CORS 우회 프록시를 쓰지 않는다 — 등록한 URL이 외부 제3자 서버로 전달되지 않도록
-    // 코어 자체 프록시(/api/webview/proxy)만 사용한다.)
-    // getProxyUrl은 화이트리스트 검증에 실패하면 자체적으로 토스트 안내를 띄우고 null을 반환하므로,
-    // 여기서는 별도 알림 없이 실패로 처리한다.
+    // 코어 자체 프록시만 사용한다.)
+    // /api/webview/proxy는 응답 전체를 메모리에 15MB까지만 캡해서 읽으므로, 아주 큰(수십MB) EPG XML은
+    // 직접 fetch가 안 되는 환경에서 프록시로도 잘릴 수 있다(413 응답 초과 에러).
+    // getProxyUrl 자체는 화이트리스트 검증에 실패하면 자체적으로 토스트 안내를 띄우고 null을 반환하므로
+    // 여기서는 별도 알림 없이 실패로 처리하되, 프록시가 반환하는 {"success":false,"error":...,"message":...}
+    // 형태의 에러 본문이 있으면 그 메시지를 그대로 노출한다(사설 IP 차단/응답 초과 등 원인을 알 수 있게).
     async function fetchTextWithCorsFallback(url) {
         try {
             const res = await fetch(url);
@@ -282,6 +294,10 @@
             if (proxyUrl) {
                 const res = await fetch(proxyUrl);
                 if (res.ok) return await res.text();
+                const errBody = await res.json().catch(() => null);
+                if (errBody && errBody.message) {
+                    throw new Error(errBody.message);
+                }
             }
         }
 
@@ -614,7 +630,8 @@
             if (ch.logo) {
                 const img = document.createElement('img');
                 img.className = 'm3u-ch-logo';
-                img.src = ch.logo;
+                // 방송사 로고는 도메인이 제각각이라 로컬 캐시 프록시(/api/webview/logo-cache)를 경유한다
+                img.src = logoCacheUrl(ch.logo);
                 img.loading = 'lazy';
                 img.onerror = () => { logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>'; };
                 logoBox.appendChild(img);
@@ -711,7 +728,8 @@
         osdChannelName.textContent = channel.name;
         osdGroupName.textContent = channel.group || 'Live';
         if (channel.logo) {
-            osdLogoEl.src = channel.logo;
+            // 방송사 로고는 도메인이 제각각이라 로컬 캐시 프록시(/api/webview/logo-cache)를 경유한다
+            osdLogoEl.src = logoCacheUrl(channel.logo);
             osdLogoEl.style.display = 'block';
             osdFallbackIcon.style.display = 'none';
         } else {
@@ -824,9 +842,14 @@
     }
 
     // 직접 재생이 실패했을 때(CORS/mixed-content 등) 코어의 스트림 프록시로 한 번 더 시도한다.
-    // getStreamProxyUrl은 .m3u8은 내부 세그먼트까지 프록시로 재작성해 돌려주고,
-    // 그 외 스트림은 버퍼링 없는 pass-through로 중계한다. 화이트리스트 실패 시 자체 토스트를
-    // 띄우고 null을 반환하므로 여기서는 별도 알림 없이 오프라인 처리한다.
+    // getStreamProxyUrl은 .m3u8은 내부 세그먼트 URL까지 프록시로 재작성해 돌려주고,
+    // 그 외 스트림은 버퍼링 없는 pass-through로 중계한다(/api/webview/hls-proxy).
+    // ⚠️ 이 프록시는 서버 쪽에서 사설/루프백 IP로 해석되는 URL을 403으로 차단한다(SSRF 방지).
+    // 즉 사용자의 개인 M3U 서버가 사설 IP(예: 192.168.x.x)이고 직접 접근이 CORS로 막혀 있다면
+    // 이 프록시로도 재생이 안 될 수 있다 — 이 경우 개인 서버 쪽에서 CORS 헤더를 열어주는 것이
+    // 근본 해결책이다(README 참고).
+    // 화이트리스트 실패 시 getStreamProxyUrl 자체가 토스트 안내를 띄우고 null을 반환하므로
+    // 여기서는 별도 알림 없이 오프라인 처리한다.
     async function retryViaStreamProxy(channel, originalUrl) {
         if (!window.BookOasisPlugin || typeof window.BookOasisPlugin.getStreamProxyUrl !== 'function') {
             setChannelStatus(channel, 'offline');
