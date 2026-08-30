@@ -1,66 +1,68 @@
 <!-- plugins/metadata/m3u_player/index.html -->
-<div class="m3u-container">
-    <!-- 좌측: 비디오 플레이어 영역 -->
-    <div class="m3u-player-pane">
-        <div class="m3u-player-wrapper">
+<div class="m3u-root">
+    <!-- [좌측] 비디오 플레이어 영역 -->
+    <section class="m3u-player-section">
+        <div class="m3u-video-wrapper">
             <video id="m3uVideoPlayer" controls playsinline></video>
-            <div id="m3uPlayerOverlay" class="m3u-player-overlay">
+            <div id="m3uPlayerOverlay" class="m3u-overlay">
                 <i class="fa-solid fa-circle-play m3u-overlay-icon"></i>
-                <p id="m3uOverlayText">채널을 선택하거나 M3U 목록을 불러와주세요.</p>
+                <span id="m3uOverlayText">채널을 선택해주세요</span>
             </div>
         </div>
-        <div class="m3u-now-playing">
-            <div class="m3u-now-playing-info">
-                <span class="m3u-badge">LIVE</span>
-                <span id="m3uCurrentChannelTitle" class="m3u-current-title">재생 중인 채널 없음</span>
+        
+        <!-- 현재 재생 정보 바 -->
+        <div class="m3u-playing-bar">
+            <div class="m3u-badge">ON AIR</div>
+            <div class="m3u-playing-text">
+                <div id="m3uCurrentChannelTitle" class="m3u-title">재생 중인 채널이 없습니다</div>
+                <div id="m3uCurrentChannelGroup" class="m3u-group">M3U IPTV Player</div>
             </div>
-            <div class="m3u-now-playing-sub" id="m3uCurrentChannelGroup">M3U Playlist Player</div>
         </div>
-    </div>
+    </section>
 
-    <!-- 우측: M3U 주소 입력, 필터 및 채널 목록 패널 -->
-    <div class="m3u-list-pane">
-        <!-- 상단 컨트롤: M3U 로드 및 파일 업로드 -->
-        <div class="m3u-controls-box">
-            <div class="m3u-input-group">
-                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="https://example.com/playlist.m3u">
-                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary" title="M3U 주소 불러오기">
-                    <i class="fa-solid fa-download"></i> 로드
+    <!-- [우측] 채널 탐색 및 제어 사이드바 -->
+    <aside class="m3u-sidebar-section">
+        <!-- URL 입력 및 파일 업로드 툴바 -->
+        <div class="m3u-toolbar">
+            <div class="m3u-url-row">
+                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U 주소 입력 (http://...)">
+                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary">
+                    <i class="fa-solid fa-cloud-arrow-down"></i> 로드
                 </button>
             </div>
-            <div class="m3u-sub-controls">
-                <label class="m3u-file-label" title="로컬 M3U 파일 업로드">
+            <div class="m3u-btn-row">
+                <label class="m3u-btn m3u-btn-outline m3u-file-btn">
                     <i class="fa-solid fa-folder-open"></i> 파일 열기
                     <input type="file" id="m3uFileInput" accept=".m3u,.m3u8" style="display:none;">
                 </label>
-                <button id="m3uDirectPlayBtn" class="m3u-btn m3u-btn-secondary" title="단일 m3u8 주소 즉시 재생">
+                <button id="m3uDirectPlayBtn" class="m3u-btn m3u-btn-outline">
                     <i class="fa-solid fa-play"></i> 단일 URL 재생
                 </button>
             </div>
         </div>
 
-        <!-- 검색창 및 그룹 선택기 -->
-        <div class="m3u-filter-box">
+        <!-- 검색 & 그룹 필터 -->
+        <div class="m3u-filter-panel">
             <div class="m3u-search-wrap">
-                <i class="fa-solid fa-magnifying-glass m3u-search-icon"></i>
-                <input type="text" id="m3uSearchInput" class="m3u-input m3u-search-input" placeholder="채널명 검색...">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 실시간 검색...">
             </div>
             <select id="m3uGroupSelect" class="m3u-select">
                 <option value="">전체 그룹 (All)</option>
             </select>
         </div>
 
-        <!-- 채널 개수 표시 -->
-        <div class="m3u-status-bar">
-            <span>총 <b id="m3uChannelCount">0</b>개 채널</span>
+        <!-- 채널 개수 카운터 -->
+        <div class="m3u-count-bar">
+            <span>채널 목록 (<b id="m3uChannelCount">0</b>)</span>
         </div>
 
-        <!-- 채널 리스트 -->
-        <div id="m3uChannelList" class="m3u-channel-list">
-            <div class="m3u-empty-state">불러온 채널이 없습니다.</div>
+        <!-- 스크롤 채널 리스트 -->
+        <div id="m3uChannelList" class="m3u-list-scroll">
+            <div class="m3u-empty-state">M3U 목록을 불러와주세요.</div>
         </div>
-    </div>
+    </aside>
 </div>
 
-<!-- HLS.js CDN 로드 -->
+<!-- HLS.js CDN -->
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
