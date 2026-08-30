@@ -13,7 +13,7 @@
 ### 🗂️ 최대 5개 멀티 M3U/EPG 소스 병합 관리
 - 개인 스트림과 공개 스트림(iptv-org, FAST 채널 등)을 최대 5개 세트까지 등록해 동시 병합
 - 출처별 자동 태깅 (`[개인] 지상파`, `[iptv-org] 뉴스` 등)
-- **설정은 `./plugins/data/m3u_player/sources.json` 파일에 저장**되어, 컴퓨터를 옮기거나
+- **설정은 `./plugins/data/ym_m3u_player/sources.json` 파일에 저장**되어, 컴퓨터를 옮기거나
   BookOasis를 재설치해도 (`plugins/data/` 폴더 자체를 함께 옮기는 한) 값이 보존됩니다.
   - 플러그인 코드가 있는 `plugins/metadata/m3u_player/`와는 별개 위치입니다 — 코드는 업데이트 시
     통째로 교체될 수 있지만 `plugins/data/`는 그대로 남습니다.
@@ -50,14 +50,14 @@
 ```
 plugins/metadata/m3u_player/       # 코드 (업데이트 시 통째로 교체될 수 있음)
 ├── __init__.py       # 플러그인 모듈 등록
-├── m3u_player.py      # 플러그인 클래스 선언, config_schema(최초 시드용), 설정 조회/저장(get_dashboard_data/apply)
+├── ym_m3u_player.py   # 플러그인 클래스 선언, config_schema(최초 시드용), 설정 조회/저장(get_dashboard_data/apply)
 ├── VERSION.txt        # 버전 매니페스트
 ├── index.html          # 좌측 플레이어 & 우측 채널/EPG 사이드바 템플릿
 ├── style.css            # 반응형 Grid & 글래스모피즘 테마 스타일시트
 ├── script.js             # 하이브리드 플레이어, XMLTV/M3U 파서, 헬스체크, 설정 동기화 로직
 └── README.md              # 본 문서
 
-plugins/data/m3u_player/           # 데이터 (재설치·이전해도 보존됨)
+plugins/data/ym_m3u_player/           # 데이터 (재설치·이전해도 보존됨)
 └── sources.json                    # 5개 세트 M3U/EPG 소스 설정 - 실제 저장소
 ```
 
@@ -73,7 +73,7 @@ plugins/data/m3u_player/           # 데이터 (재설치·이전해도 보존�
 **방법 A. 웹 화면에서 직접 등록 (추천, 언제든 사용 가능)**
 1. M3U 플레이어 화면 우측 상단의 **[⚙️ 소스 관리 (5세트)]** 버튼을 클릭합니다.
 2. 원하는 세트에 체크(ON) 후 태그명, M3U URL, EPG URL을 입력합니다.
-3. **[저장하고 채널 새로고침]** 버튼을 누르면 `plugins/data/m3u_player/sources.json`에 저장되고
+3. **[저장하고 채널 새로고침]** 버튼을 누르면 `plugins/data/ym_m3u_player/sources.json`에 저장되고
    즉시 전체 소스가 병합 로드됩니다.
 
 **방법 B. 관리자 환경설정에서 등록 (최초 설치 시 1회만 유효)**
@@ -137,9 +137,9 @@ plugins/data/m3u_player/           # 데이터 (재설치·이전해도 보존�
 - 소스 설정은 라이브러리 스코프(일반/성인/오디오북/영상)와 무관하게 전역 하나로 통합 관리됩니다.
   세션별로 다른 채널 구성을 쓰고 싶은 경우는 아직 지원하지 않습니다.
 - **관리자 환경설정 화면(config_schema)은 최초 설치 시 1회 시드로만 쓰이고, 이후로는
-  `plugins/data/m3u_player/sources.json`이 유일한 저장소입니다.** 설치 후 소스를 바꿀 때는
+  `plugins/data/ym_m3u_player/sources.json`이 유일한 저장소입니다.** 설치 후 소스를 바꿀 때는
   반드시 카테고리탭의 [⚙️ 소스 관리] 모달을 사용하세요.
 - `plugins/data/` 폴더 자체를 백업/이전하지 않으면(예: 컨테이너만 새로 만들고 볼륨을 마운트하지
-  않은 경우) 이 설정도 함께 유실됩니다 — 컴퓨터를 옮길 때는 `plugins/data/m3u_player/` 폴더를
+  않은 경우) 이 설정도 함께 유실됩니다 — 컴퓨터를 옮길 때는 `plugins/data/ym_m3u_player/` 폴더를
   함께 복사하세요.
 - 사설 IP 기반 개인 서버, 대용량 EPG 파일의 제약은 위 "보안 및 런타임 제약" 항목을 참고하세요.

@@ -1,7 +1,7 @@
 // plugins/metadata/m3u_player/script.js
 (function () {
     // m3u_player.py의 id와 반드시 일치해야 한다 (API 경로에 사용)
-    const PLUGIN_ID = 'm3u_player';
+    const PLUGIN_ID = 'ym_m3u_player';
     // 이 플러그인 설정은 라이브러리 스코프와 무관한 전역 값이므로 조회/저장 모두
     // 항상 "general"로 고정한다 (m3u_player.py의 CONFIG_SCOPE와 반드시 일치해야 함).
     const CONFIG_SCOPE = 'general';

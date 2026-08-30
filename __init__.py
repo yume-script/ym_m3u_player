@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
-from .m3u_player import M3UPlayerPlugin
+from .ym_m3u_player import YM_M3UPlayerPlugin
 
-__all__ = ["M3UPlayerPlugin"]
+__all__ = ["YM_M3UPlayerPlugin"]
