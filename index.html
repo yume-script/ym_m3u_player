@@ -1,8 +1,8 @@
 <!-- plugins/metadata/m3u_player/index.html -->
 <div class="m3u-root">
-    <!-- [좌측] 비디오 플레이어 및 EPG 정보 영역 -->
+    <!-- [좌측] 비디오 플레이어 및 EPG 타임라인 영역 -->
     <section class="m3u-player-section">
-        <div class="m3u-video-wrapper">
+        <div class="m3u-video-wrapper" id="m3uVideoWrapper">
             <video id="m3uVideoPlayer" controls playsinline></video>
             <div id="m3uPlayerOverlay" class="m3u-overlay">
                 <i class="fa-solid fa-circle-play m3u-overlay-icon"></i>
@@ -10,65 +10,91 @@
             </div>
         </div>
         
-        <!-- 현재 재생 채널 및 EPG 정보 바 -->
-        <div class="m3u-playing-bar">
-            <div class="m3u-badge">ON AIR</div>
-            <div class="m3u-playing-text">
-                <div class="m3u-title-row">
+        <!-- [개선] 실시간 EPG 시간대별 진행사항 바 -->
+        <div class="m3u-playing-card">
+            <!-- 상단: 채널 정보 & 버튼 -->
+            <div class="m3u-card-header">
+                <div class="m3u-title-group">
+                    <span class="m3u-badge">LIVE</span>
                     <span id="m3uCurrentChannelTitle" class="m3u-title">재생 중인 채널이 없습니다</span>
                     <span id="m3uCurrentChannelGroup" class="m3u-group-badge">M3U</span>
-                    <span id="m3uStreamEngineBadge" class="m3u-engine-badge">ENGINE</span>
+                    <span id="m3uStreamEngineBadge" class="m3u-engine-badge">HLS</span>
                 </div>
-                <!-- 실시간 EPG 정보 표시 -->
-                <div id="m3uCurrentEpgInfo" class="m3u-epg-now">
-                    <i class="fa-solid fa-clock-rotate-left"></i>
-                    <span id="m3uCurrentEpgText">편성표 정보 없음</span>
+                <div class="m3u-action-group">
+                    <button id="m3uFavCurrentBtn" class="m3u-icon-btn" title="현재 채널 즐겨찾기">
+                        <i class="fa-regular fa-star" id="m3uCurrentFavIcon"></i>
+                    </button>
+                    <button id="m3uOpenScheduleBtn" class="m3u-btn m3u-btn-secondary m3u-btn-sm" title="오늘 전체 편성표 보기">
+                        <i class="fa-solid fa-calendar-days"></i> 편성표
+                    </button>
                 </div>
+            </div>
+
+            <!-- 중단: 현재 프로그램 및 진행률 프로그레스 바 -->
+            <div class="m3u-epg-progress-container">
+                <div class="m3u-epg-title-row">
+                    <span class="m3u-now-tag">현재 방송</span>
+                    <span id="m3uCurrentProgramTitle" class="m3u-prog-title">편성표 정보 없음</span>
+                    <span id="m3uCurrentProgramTime" class="m3u-prog-time">--:-- ~ --:--</span>
+                </div>
+                <!-- 진행바 트랙 -->
+                <div class="m3u-progress-track">
+                    <div id="m3uProgressBar" class="m3u-progress-fill" style="width: 0%;"></div>
+                </div>
+                <div class="m3u-progress-meta">
+                    <span id="m3uProgressPercent">0%</span>
+                    <span id="m3uRemainingTime">남은 시간 계산 중...</span>
+                </div>
+            </div>
+
+            <!-- 하단: 다음 방송 예고 (NEXT) -->
+            <div class="m3u-next-program-row">
+                <span class="m3u-next-tag">NEXT</span>
+                <span id="m3uNextProgramText" class="m3u-next-text">다음 방영 예정 프로그램 없음</span>
             </div>
         </div>
     </section>
 
-    <!-- [우측] 사이드바 (M3U/EPG 설정, 채널 검색 및 목록) -->
+    <!-- [우측] 사이드바 -->
     <aside class="m3u-sidebar-section">
-        <!-- 상단 URL 입력 및 빠른 설정 토글 -->
         <div class="m3u-toolbar">
             <div class="m3u-url-row">
-                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U URL 입력 (http://...)">
-                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary" title="M3U 목록 로드">
+                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U URL (http://...)">
+                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary" title="M3U 로드">
                     <i class="fa-solid fa-cloud-arrow-down"></i> 로드
                 </button>
             </div>
 
             <div class="m3u-url-row">
-                <input type="text" id="m3uEpgInput" class="m3u-input" placeholder="EPG (XMLTV) URL 입력 (선택)">
-                <button id="m3uEpgLoadBtn" class="m3u-btn m3u-btn-secondary" title="EPG 편성표 로드">
+                <input type="text" id="m3uEpgInput" class="m3u-input" placeholder="EPG (XMLTV) URL">
+                <button id="m3uEpgLoadBtn" class="m3u-btn m3u-btn-secondary" title="EPG 로드">
                     <i class="fa-solid fa-table-list"></i> EPG
                 </button>
             </div>
 
             <div class="m3u-btn-row">
-                <label class="m3u-btn m3u-btn-outline m3u-file-btn" title="로컬 M3U 파일 열기">
+                <label class="m3u-btn m3u-btn-outline m3u-file-btn" title="로컬 M3U 파일">
                     <i class="fa-solid fa-folder-open"></i> 파일 열기
                     <input type="file" id="m3uFileInput" accept=".m3u,.m3u8" style="display:none;">
                 </label>
-                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline" title="현재 입력된 주소를 브라우저 기본값으로 저장">
+                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline" title="기본값 저장">
                     <i class="fa-solid fa-bookmark"></i> 기본값 저장
                 </button>
             </div>
         </div>
 
-        <!-- 검색 & 그룹 필터 -->
+        <!-- 검색 & 그룹/즐겨찾기 필터 -->
         <div class="m3u-filter-panel">
             <div class="m3u-search-wrap">
                 <i class="fa-solid fa-magnifying-glass"></i>
-                <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 또는 프로그램 검색...">
+                <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 / 프로그램 검색...">
             </div>
             <select id="m3uGroupSelect" class="m3u-select">
                 <option value="">전체 그룹 (All)</option>
+                <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
             </select>
         </div>
 
-        <!-- 채널 개수 & EPG 상태 -->
         <div class="m3u-count-bar">
             <span>채널 목록 (<b id="m3uChannelCount">0</b>)</span>
             <span id="m3uEpgStatus" class="m3u-epg-status">EPG 미적용</span>
@@ -79,9 +105,21 @@
             <div class="m3u-empty-state">M3U 목록을 불러와주세요.</div>
         </div>
     </aside>
+
+    <!-- [팝업] 당일 전체 편성표 모달 -->
+    <div id="m3uScheduleModal" class="m3u-modal hidden">
+        <div class="m3u-modal-content">
+            <div class="m3u-modal-header">
+                <h3 id="m3uScheduleTitle">📺 채널 편성표</h3>
+                <button id="m3uCloseModalBtn" class="m3u-close-btn">&times;</button>
+            </div>
+            <div id="m3uScheduleList" class="m3u-modal-body">
+                <!-- 편성표 리스트가 동적 생성됨 -->
+            </div>
+        </div>
+    </div>
 </div>
 
-<!-- 1. HLS.js (m3u8 스트리밍) -->
+<!-- 라이브러리 CDN -->
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
-<!-- 2. MPEGTS.js (TS 직접 스트림 / MPEG-TS / FLV 지원) -->
 <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
