@@ -15,6 +15,7 @@
     let timerInterval = null;
     let osdTimeout = null;
 
+    // 5개 소스 기본 슬롯
     let sourceSlots = [
         { enabled: true, name: '개인', m3u: '', epg: '' },
         { enabled: false, name: 'iptv-org', m3u: 'https://iptv-org.github.io/iptv/countries/kr.m3u', epg: 'https://iptv-org.github.io/epg/guides/kr.xml' },
@@ -85,17 +86,17 @@
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
 
-        const savedSources = localStorage.getItem('m3u_source_slots_v2');
-        if (savedSources) {
-            try { sourceSlots = JSON.parse(savedSources); } catch (e) {}
-        } else {
-            await syncServerSources();
-        }
+        // 1. 소스 불러오기 (서버 설정 & 로컬스토리지 복합 동기화)
+        await loadConfigSources();
 
+        // 2. 소스 전체 로드 실행
         loadAllSources();
     }
 
-    async function syncServerSources() {
+    // [개선] 서버 관리자 설정과 브라우저 저장소를 모두 고려하여 안전하게 로드
+    async function loadConfigSources() {
+        let serverConfigFound = false;
+
         try {
             const res = await fetch('/api/media/plugins');
             if (res.ok) {
@@ -104,16 +105,44 @@
                 const myPlugin = plugins.find(p => p.id === 'm3u_player');
                 if (myPlugin && myPlugin.config) {
                     const cfg = myPlugin.config;
+                    let hasAnyServerM3U = false;
+
                     for (let i = 0; i < 5; i++) {
                         const idx = i + 1;
-                        if (cfg[`NAME_${idx}`] !== undefined) sourceSlots[i].name = cfg[`NAME_${idx}`] || `세트 ${idx}`;
-                        if (cfg[`M3U_${idx}`] !== undefined) sourceSlots[i].m3u = cfg[`M3U_${idx}`] || '';
-                        if (cfg[`EPG_${idx}`] !== undefined) sourceSlots[i].epg = cfg[`EPG_${idx}`] || '';
-                        if (cfg[`ENABLE_${idx}`] !== undefined) sourceSlots[i].enabled = Boolean(cfg[`ENABLE_${idx}`]);
+                        if (cfg[`M3U_${idx}`]) hasAnyServerM3U = true;
+                    }
+
+                    // 서버에 값이 등록되어 있다면 서버 설정을 우선 반영
+                    if (hasAnyServerM3U) {
+                        serverConfigFound = true;
+                        for (let i = 0; i < 5; i++) {
+                            const idx = i + 1;
+                            sourceSlots[i] = {
+                                enabled: cfg[`ENABLE_${idx}`] !== undefined ? Boolean(cfg[`ENABLE_${idx}`]) : (i === 0),
+                                name: cfg[`NAME_${idx}`] || `세트 ${idx}`,
+                                m3u: (cfg[`M3U_${idx}`] || '').trim(),
+                                epg: (cfg[`EPG_${idx}`] || '').trim()
+                            };
+                        }
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[M3UPlayer] Server config fetch error:', e);
+        }
+
+        // 서버 설정에 등록된 것이 없다면 브라우저 로컬 저장소 확인
+        if (!serverConfigFound) {
+            const saved = localStorage.getItem('m3u_source_slots_v2');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        sourceSlots = parsed;
+                    }
+                } catch (e) {}
+            }
+        }
     }
 
     function bindEvents() {
@@ -168,7 +197,7 @@
         currentFavIcon.className = favorites.has(id) ? 'fa-solid fa-star' : 'fa-regular fa-star';
     }
 
-    // 소스 관리 모달
+    // 소스 관리 모달 팝업 렌더링
     function openSourceModal() {
         sourceSlotsContainer.innerHTML = '';
         sourceSlots.forEach((slot, i) => {
@@ -180,13 +209,13 @@
                         <input type="checkbox" id="slot_enable_${i}" ${slot.enabled ? 'checked' : ''}>
                         <span>세트 ${i + 1}</span>
                     </label>
-                    <input type="text" id="slot_name_${i}" class="m3u-input m3u-slot-name-input" value="${slot.name}" placeholder="태그">
+                    <input type="text" id="slot_name_${i}" class="m3u-input m3u-slot-name-input" value="${escapeHtml(slot.name || `세트 ${i+1}`)}" placeholder="태그">
                 </div>
                 <div class="m3u-slot-url-row">
-                    <input type="text" id="slot_m3u_${i}" class="m3u-input" value="${slot.m3u}" placeholder="M3U URL">
+                    <input type="text" id="slot_m3u_${i}" class="m3u-input" value="${escapeHtml(slot.m3u || '')}" placeholder="M3U URL (http://...)">
                 </div>
                 <div class="m3u-slot-url-row">
-                    <input type="text" id="slot_epg_${i}" class="m3u-input" value="${slot.epg}" placeholder="EPG URL">
+                    <input type="text" id="slot_epg_${i}" class="m3u-input" value="${escapeHtml(slot.epg || '')}" placeholder="EPG XML URL (선택)">
                 </div>
             `;
             sourceSlotsContainer.appendChild(card);
@@ -194,36 +223,52 @@
         sourceModal.classList.remove('hidden');
     }
 
-    function saveSourcesFromModal() {
-        for (let i = 0; i < 5; i++) {
-            sourceSlots[i] = {
-                enabled: document.getElementById(`slot_enable_${i}`).checked,
-                name: document.getElementById(`slot_name_${i}`).value.trim() || `세트 ${i + 1}`,
-                m3u: document.getElementById(`slot_m3u_${i}`).value.trim(),
-                epg: document.getElementById(`slot_epg_${i}`).value.trim()
-            };
-        }
-        localStorage.setItem('m3u_source_slots_v2', JSON.stringify(sourceSlots));
-        sourceModal.classList.add('hidden');
-        loadAllSources();
+    function escapeHtml(str) {
+        return (str || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    // 전체 로드
+    // 모달에서 저장 클릭 시 확실한 저장 & 반영
+    function saveSourcesFromModal() {
+        for (let i = 0; i < 5; i++) {
+            const enableEl = document.getElementById(`slot_enable_${i}`);
+            const nameEl = document.getElementById(`slot_name_${i}`);
+            const m3uEl = document.getElementById(`slot_m3u_${i}`);
+            const epgEl = document.getElementById(`slot_epg_${i}`);
+
+            sourceSlots[i] = {
+                enabled: enableEl ? enableEl.checked : false,
+                name: nameEl ? nameEl.value.trim() : `세트 ${i + 1}`,
+                m3u: m3uEl ? m3uEl.value.trim() : '',
+                epg: epgEl ? epgEl.value.trim() : ''
+            };
+        }
+
+        // 로컬 저장소에 즉시 영구 저장
+        localStorage.setItem('m3u_source_slots_v2', JSON.stringify(sourceSlots));
+        sourceModal.classList.add('hidden');
+        
+        // 새로고침 및 로드
+        loadAllSources();
+        alert('설정이 저장되었습니다.');
+    }
+
+    // 전체 활성 소스 로드
     async function loadAllSources() {
         setOverlay('전체 M3U 소스를 불러오는 중...', true);
         activeSourcesBar.innerHTML = '';
         allChannels = [];
         epgProgrammes = {};
 
-        const activeSlots = sourceSlots.filter(s => s.enabled && s.m3u);
+        const activeSlots = sourceSlots.filter(s => s.enabled && s.m3u && s.m3u.trim());
 
         if (activeSlots.length === 0) {
-            setOverlay('활성화된 M3U 소스가 없습니다. [⚙️ 소스 관리]에서 등록하세요.', true);
+            setOverlay('활성화된 M3U 소스가 없습니다.\n[⚙️ 소스 관리] 또는 [환경설정]에서 주소를 등록해주세요.', true);
             channelCountEl.textContent = '0';
             channelListEl.innerHTML = '<div class="m3u-empty-state">활성화된 소스가 없습니다.</div>';
             return;
         }
 
+        // 활성 소스 뱃지
         activeSlots.forEach(s => {
             const badge = document.createElement('span');
             badge.className = 'm3u-source-tag';
@@ -231,8 +276,8 @@
             activeSourcesBar.appendChild(badge);
         });
 
-        // EPG 로드
-        const epgPromises = activeSlots.filter(s => s.epg).map(s => loadEPGFile(s.epg, s.name));
+        // 1. EPG 병렬 로드
+        const epgPromises = activeSlots.filter(s => s.epg && s.epg.trim()).map(s => loadEPGFile(s.epg.trim(), s.name));
         Promise.allSettled(epgPromises).then(results => {
             const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
             epgStatusEl.textContent = successCount > 0 ? `EPG ${successCount}개 적용됨` : 'EPG 미적용';
@@ -241,13 +286,13 @@
             updateLiveProgress();
         });
 
-        // M3U 로드
-        const m3uPromises = activeSlots.map(s => loadM3UFile(s.m3u, s.name));
+        // 2. M3U 재생목록 병렬 로드
+        const m3uPromises = activeSlots.map(s => loadM3UFile(s.m3u.trim(), s.name));
         const m3uResults = await Promise.allSettled(m3uPromises);
 
         let mergedChannels = [];
         m3uResults.forEach(res => {
-            if (res.status === 'fulfilled' && res.value) {
+            if (res.status === 'fulfilled' && Array.isArray(res.value)) {
                 mergedChannels = mergedChannels.concat(res.value);
             }
         });
@@ -255,6 +300,7 @@
         allChannels = mergedChannels;
         channelCountEl.textContent = allChannels.length;
 
+        // 그룹 드롭다운 재구성
         const groups = new Set();
         allChannels.forEach(c => { if (c.group) groups.add(c.group); });
 
@@ -272,6 +318,7 @@
         renderFilteredChannels();
         setOverlay('채널을 선택하세요.', true);
 
+        // 첫 번째 채널 자동 재생
         if (allChannels.length > 0 && !activeChannel) {
             playStream(allChannels[0]);
         }
@@ -284,6 +331,7 @@
             const text = await res.text();
             return parseM3U(text, sourceName);
         } catch (e) {
+            console.error(`[M3UPlayer] M3U 로드 실패 (${sourceName}):`, e);
             return [];
         }
     }
@@ -296,6 +344,7 @@
             parseXMLTV(xmlText);
             return true;
         } catch (e) {
+            console.error(`[M3UPlayer] EPG 로드 실패 (${sourceName}):`, e);
             return false;
         }
     }
@@ -416,9 +465,9 @@
         return { current, next, progress, timeText, remainText };
     }
 
-    // 🩺 사전 스트림 헬스체크 (동시 4개씩 백그라운드 핑)
+    // 사전 스트림 헬스체크
     async function startHealthCheckBatch() {
-        if (isHealthChecking) return;
+        if (isHealthChecking || allChannels.length === 0) return;
         isHealthChecking = true;
         healthCheckBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 점검 중...';
 
@@ -434,7 +483,7 @@
 
                 try {
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 2500); // 2.5초 타임아웃
+                    const timeoutId = setTimeout(() => controller.abort(), 2500);
                     const res = await fetch(ch.url, { method: 'GET', signal: controller.signal, headers: { 'Range': 'bytes=0-50' } });
                     clearTimeout(timeoutId);
 
@@ -476,7 +525,6 @@
             const statusKey = c.id || c.url;
             const status = channelHealth[statusKey] || 'unknown';
 
-            // 정상 채널 전용 필터 적용 시
             if (onlyOnline && status === 'offline') return false;
 
             if (selectedGroup === '__FAVORITES__' && !favorites.has(chId)) return false;
@@ -503,13 +551,11 @@
                              (activeChannel === ch ? ' active' : '') + 
                              (isOffline ? ' is-offline' : '');
 
-            // 상태등 (Dot)
             const dot = document.createElement('span');
             dot.className = `m3u-status-dot ${status}`;
             dot.title = isOffline ? '재생 불가/오프라인' : (status === 'online' ? '정상 스트림' : '미확인');
             item.appendChild(dot);
 
-            // 로고
             const logoBox = document.createElement('div');
             logoBox.className = 'm3u-logo-box';
             if (ch.logo) {
@@ -644,7 +690,6 @@
         osdTimeout = setTimeout(() => { tvOsdEl.classList.add('hidden'); }, 3500);
     }
 
-    // 스트림 재생 및 실패 시 오프라인 자동 마킹
     function playStream(channel) {
         activeChannel = channel;
         currentTitleEl.textContent = channel.name;
