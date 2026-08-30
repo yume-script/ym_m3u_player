@@ -1,11 +1,11 @@
 <!-- plugins/metadata/m3u_player/index.html -->
 <div class="m3u-root">
-    <!-- [좌측] 비디오 플레이어 영역 -->
+    <!-- [좌측] 비디오 플레이어 및 EPG 타임라인 영역 -->
     <section class="m3u-player-section">
         <div class="m3u-video-wrapper" id="m3uVideoWrapper">
             <video id="m3uVideoPlayer" controls playsinline></video>
             
-            <!-- 채널 변경 시 나타나는 TV 스타일 OSD 안내창 -->
+            <!-- TV OSD 안내창 -->
             <div id="m3uTvOsd" class="m3u-tv-osd hidden">
                 <div class="m3u-osd-logo-box">
                     <img id="m3uOsdLogo" class="m3u-osd-logo" src="" alt="logo">
@@ -18,16 +18,15 @@
                         <span id="m3uOsdGroupName" class="m3u-osd-group-name">지상파</span>
                     </div>
                     <div class="m3u-osd-prog-row">
-                        <span id="m3uOsdProgTitle" class="m3u-osd-prog-title">출발! 비디오 여행</span>
-                        <span id="m3uOsdProgTime" class="m3u-osd-prog-time">12:10 ~ 13:20</span>
+                        <span id="m3uOsdProgTitle" class="m3u-osd-prog-title">방송 정보</span>
+                        <span id="m3uOsdProgTime" class="m3u-osd-prog-time">--:-- ~ --:--</span>
                     </div>
-                    <!-- OSD 실시간 진행바 -->
                     <div class="m3u-osd-progress-track">
                         <div id="m3uOsdProgressBar" class="m3u-osd-progress-fill" style="width: 0%;"></div>
                     </div>
                     <div class="m3u-osd-bottom-row">
-                        <span id="m3uOsdProgressMeta" class="m3u-osd-meta">65% (종료까지 약 25분 남음)</span>
-                        <span id="m3uOsdNextProg" class="m3u-osd-next">NEXT: [13:20] MBC 뉴스데스크</span>
+                        <span id="m3uOsdProgressMeta" class="m3u-osd-meta"></span>
+                        <span id="m3uOsdNextProg" class="m3u-osd-next"></span>
                     </div>
                 </div>
             </div>
@@ -81,24 +80,22 @@
 
     <!-- [우측] 사이드바 -->
     <aside class="m3u-sidebar-section">
-        <div class="m3u-toolbar">
-            <div class="m3u-url-row">
-                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U URL (http://...)">
-                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary"><i class="fa-solid fa-cloud-arrow-down"></i> 로드</button>
-            </div>
-            <div class="m3u-url-row">
-                <input type="text" id="m3uEpgInput" class="m3u-input" placeholder="EPG URL">
-                <button id="m3uEpgLoadBtn" class="m3u-btn m3u-btn-secondary"><i class="fa-solid fa-table-list"></i> EPG</button>
-            </div>
-            <div class="m3u-btn-row">
-                <label class="m3u-btn m3u-btn-outline m3u-file-btn">
-                    <i class="fa-solid fa-folder-open"></i> 파일 열기
-                    <input type="file" id="m3uFileInput" accept=".m3u,.m3u8" style="display:none;">
-                </label>
-                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline"><i class="fa-solid fa-bookmark"></i> 기본값 저장</button>
-            </div>
+        <!-- 툴바: 소스 관리 모달 열기 & 전체 새로고침 -->
+        <div class="m3u-toolbar-row">
+            <button id="m3uOpenSourceModalBtn" class="m3u-btn m3u-btn-primary" style="flex:1;">
+                <i class="fa-solid fa-layer-group"></i> ⚙️ 소스 관리 (5세트)
+            </button>
+            <button id="m3uReloadAllBtn" class="m3u-btn m3u-btn-secondary" title="전체 소스 다시 불러오기">
+                <i class="fa-solid fa-rotate-right"></i>
+            </button>
         </div>
 
+        <!-- 활성 소스 뱃지 바 -->
+        <div id="m3uActiveSourcesBar" class="m3u-active-sources-bar">
+            <!-- 활성화된 소스 태그가 동적 생성됨 -->
+        </div>
+
+        <!-- 검색 & 그룹 필터 -->
         <div class="m3u-filter-panel">
             <div class="m3u-search-wrap">
                 <i class="fa-solid fa-magnifying-glass"></i>
@@ -111,16 +108,38 @@
         </div>
 
         <div class="m3u-count-bar">
-            <span>채널 목록 (<b id="m3uChannelCount">0</b>)</span>
-            <span id="m3uEpgStatus" class="m3u-epg-status">EPG 미적용</span>
+            <span>채널 (<b id="m3uChannelCount">0</b>)</span>
+            <span id="m3uEpgStatus" class="m3u-epg-status">EPG 상태 확인 중</span>
         </div>
 
+        <!-- 채널 리스트 -->
         <div id="m3uChannelList" class="m3u-list-scroll">
-            <div class="m3u-empty-state">M3U 목록을 불러와주세요.</div>
+            <div class="m3u-empty-state">등록된 소스에서 채널을 불러오는 중...</div>
         </div>
     </aside>
 
-    <!-- 편성표 모달 -->
+    <!-- [모달 1] 5개 M3U/EPG 소스 관리 모달 -->
+    <div id="m3uSourceModal" class="m3u-modal hidden">
+        <div class="m3u-modal-content m3u-source-modal-content">
+            <div class="m3u-modal-header">
+                <h3>⚙️ M3U / EPG 소스 관리 (최대 5세트)</h3>
+                <button id="m3uCloseSourceModalBtn" class="m3u-close-btn">&times;</button>
+            </div>
+            <div class="m3u-modal-body">
+                <p class="m3u-modal-desc">혼용할 M3U와 EPG 주소를 등록하고 활성화 체크박스를 켜주세요.</p>
+                <div id="m3uSourceSlotsContainer" class="m3u-source-slots">
+                    <!-- 5개 세트 입력폼이 JS로 동적 생성됨 -->
+                </div>
+            </div>
+            <div class="m3u-modal-footer">
+                <button id="m3uSaveSourcesBtn" class="m3u-btn m3u-btn-primary" style="width: 100%;">
+                    <i class="fa-solid fa-check"></i> 저장하고 채널 새로고침
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- [모달 2] 당일 전체 편성표 모달 -->
     <div id="m3uScheduleModal" class="m3u-modal hidden">
         <div class="m3u-modal-content">
             <div class="m3u-modal-header">
