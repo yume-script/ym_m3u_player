@@ -20,6 +20,9 @@
     let timerInterval = null;
     let osdTimeout = null;
 
+    // 이 카테고리탭 화면이 DOM에서 제거되는 순간(다른 사이드바 메뉴로 이동)을 감시하는 옵저버.
+    let navigationObserver = null;
+
     // 재생을 시도할 때마다 1씩 증가하는 토큰. HLS 에러/프록시 재시도 같은 비동기 콜백이
     // 나중에 뒤늦게 도착했을 때, 그 사이 채널이 바뀌어 이미 낡은 시도가 됐는지 판별하는 데 쓴다.
     // (activeChannel 객체 비교만으로는 전역 hlsInstance/mpegtsPlayer를 공유하는 콜백들의
@@ -94,6 +97,7 @@
         isInitialized = true;
 
         bindEvents();
+        setupNavigationCleanupObserver();
 
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
@@ -142,6 +146,48 @@
     function logoCacheUrl(rawUrl) {
         if (!rawUrl) return '';
         return `/api/webview/logo-cache?url=${encodeURIComponent(rawUrl)}`;
+    }
+
+    // 📺 다른 사이드바 메뉴로 이동하면(=이 카테고리탭의 루트 DOM이 문서에서 제거되면) 재생을 정지한다.
+    // 단, 사용자가 PIP(Picture-in-Picture)로 이 영상을 띄워둔 상태라면 정지하지 않고 그대로 유지하며,
+    // 사용자가 PIP 창을 직접 닫는 시점(leavepictureinpicture)에 비로소 정리한다.
+    // BookOasis SPA가 탭을 전환할 때 이 컨테이너를 DOM에서 어떻게 치우는지(교체 vs 숨김) 정확한 계약이
+    // 문서화돼 있지 않아, 프레임워크에 의존하지 않는 범용적인 방식(MutationObserver로 DOM 이탈 감지)을 쓴다.
+    function setupNavigationCleanupObserver() {
+        const rootEl = document.querySelector('.m3u-root');
+        if (!rootEl || !rootEl.parentNode) return;
+
+        navigationObserver = new MutationObserver(() => {
+            if (!document.body.contains(rootEl)) {
+                handleContainerRemoved();
+            }
+        });
+        navigationObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    function handleContainerRemoved() {
+        if (navigationObserver) { navigationObserver.disconnect(); navigationObserver = null; }
+
+        if (document.pictureInPictureElement === videoEl) {
+            // PIP로 재생 중이면 그대로 유지하고, 사용자가 PIP를 닫는 시점에 정리한다.
+            videoEl.addEventListener('leavepictureinpicture', stopPlaybackForNavigation, { once: true });
+            return;
+        }
+
+        stopPlaybackForNavigation();
+    }
+
+    function stopPlaybackForNavigation() {
+        if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+        if (mpegtsPlayer) { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); mpegtsPlayer = null; }
+        try { videoEl.pause(); } catch (e) {}
+        videoEl.removeAttribute('src');
+        videoEl.load();
+
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+
+        playToken++; // 진행 중이던 재생/프록시 재시도 시도를 전부 무효화
+        activeChannel = null;
     }
 
     function bindEvents() {
