@@ -5,39 +5,59 @@ m3u_player.py
 BookOasis 카테고리탭 플러그인 - 5개 세트 M3U/EPG 소스를 등록해두고
 좌측 사이드바 독립 화면에서 실시간으로 재생/편성표를 보여준다.
 
-⚠️ 이 파일에서 새로 추가한 get_dashboard_data() / apply()는
-BookOasis의 실제 확인된 계약을 그대로 따른다 (ridi_book / dict_lookup /
-scan_scheduler / plugin_board 개발 과정에서 서버에서 직접 확인됨):
+⚠️ 설정 저장 위치 (중요, 변경됨)
+설정(5개 세트의 M3U/EPG URL 등)의 진짜 저장소는 더 이상 DB가 아니라
+파일이다:
 
-    services/plugin_db_gateway.py
-        def get_plugin_config(self, plugin_id, default=None)
-        def set_plugin_config(self, plugin_id, config)
+    ./plugins/data/m3u_player/sources.json   (앱 실행 작업 디렉터리 기준 상대 경로)
 
-    카테고리탭 프론트(script.js)는
-        GET /api/media/dashboard/widgets/{plugin_id}/data?type={dbType}
-    로 get_dashboard_data(db_type, limit)의 반환값을 받는다.
+이렇게 바꾼 이유: BookOasis 관리자 설정 화면(config_schema)에 입력한 값은
+BookOasis 코어가 자체 DB에 저장하는데, 이 DB는 컴퓨터를 옮기거나 재설치할 때
+함께 보존되지 않을 수 있다. 반면 plugins/metadata/<id>/(플러그인 코드,
+업데이트 시 통째로 교체됨)와 분리된 plugins/data/<id>/(플러그인 데이터,
+재설치·이전에도 보존됨)는 다른 BookOasis 플러그인(예: rclone_g2g_copy)에서도
+이미 이 용도로 쓰이는 위치다.
 
-    커스텀 저장 액션(단순 book 메타데이터가 아닌 임의의 데이터 저장)은
-    plugin_board / scan_scheduler와 동일하게
-        POST /api/media/books/0/apply-metadata
-        body: {"type": db_type, "source": plugin_id, "item_data": {...}}
-    로 apply(db_type, book_id, item_data)를 호출해 처리한다 (book_id=0은 더미).
+동작 방식:
+- get_dashboard_data(): 먼저 sources.json을 읽는다. 파일이 아직 없으면
+  (플러그인을 처음 설치한 직후) 관리자 설정 화면(config_schema, DB 저장)의
+  값을 딱 한 번 시드로 읽어와 그대로 sources.json에도 저장해둔다. 이후로는
+  파일이 유일한 진짜 저장소가 된다.
+- apply(): 카테고리탭의 "⚙️ 소스 관리" 모달에서 저장하면 sources.json에만
+  쓴다(DB에는 쓰지 않는다).
 
-핵심 설계: config_schema의 20개 키(ENABLE_1..5/NAME_1..5/M3U_1..5/EPG_1..5)를
-그대로 get_plugin_config()/set_plugin_config()의 저장 형식으로 재사용한다.
-그래서 관리자 설정 화면에서 값을 바꾸든, 카테고리탭의 "⚙️ 소스 관리" 모달에서
-바꾸든 항상 같은 저장소를 읽고 쓰게 되어 두 화면이 어긋나지 않는다.
+⚠️ 트레이드오프: 이 변경 이후로는 관리자 설정 화면(config_schema)에서 값을
+고쳐도 sources.json이 이미 존재하면 더 이상 반영되지 않는다(최초 1회 시드
+용도로만 쓰이기 때문). 소스 변경은 이제부터 카테고리탭의 "⚙️ 소스 관리"
+모달을 통해서만 하는 것을 권장한다.
 
-이 플러그인의 설정은 특정 라이브러리(general/adult/audiobook/video)에 종속된
-값이 아니라 전역 값이므로, db_type과 무관하게 항상 "general" 스코프의 게이트웨이로
-저장/조회한다 (CONFIG_SCOPE 상수). 이렇게 해야 사용자가 어느 사이드바 세션에서
-카테고리탭에 들어오든 항상 동일한 소스 설정을 보게 된다.
+카테고리탭 프론트(script.js)는
+    GET /api/media/dashboard/widgets/{plugin_id}/data?type={dbType}
+로 get_dashboard_data(db_type, limit)의 반환값을 받는다.
+
+커스텀 저장 액션(단순 book 메타데이터가 아닌 임의의 데이터 저장)은
+plugin_board / scan_scheduler와 동일하게
+    POST /api/media/books/0/apply-metadata
+    body: {"type": db_type, "source": plugin_id, "item_data": {...}}
+로 apply(db_type, book_id, item_data)를 호출해 처리한다 (book_id=0은 더미).
 """
+
+import json
+import os
 
 from plugins.metadata.base import BaseMetadataProvider
 
 
-# 이 플러그인 설정은 라이브러리 스코프와 무관한 전역 값이라 저장 스코프를 고정한다.
+# 이 플러그인의 설정 파일 경로(코드 위치 plugins/metadata/m3u_player/와는 별개).
+# google_links / rclone_g2g_copy 플러그인에서 확인된 것과 동일한 상대 경로 관례:
+# 앱 실행 작업 디렉터리(cwd) 기준 "./plugins/data/<플러그인id>/"를 그대로 쓴다.
+_PLUGIN_ID_FOR_PATH = "m3u_player"
+DATA_DIR = os.path.join(".", "plugins", "data", _PLUGIN_ID_FOR_PATH)
+CONFIG_FILE = os.path.join(DATA_DIR, "sources.json")
+
+# 최초 설치 직후, sources.json이 아직 없을 때 관리자 설정 화면(config_schema)의
+# 값을 시드로 읽어오기 위한 DB 조회 스코프. 이 플러그인 설정은 라이브러리
+# 스코프와 무관한 전역 값이므로 항상 "general" 하나로 고정한다.
 CONFIG_SCOPE = "general"
 
 DEFAULT_SLOTS = [
@@ -66,8 +86,9 @@ class M3UPlayerPlugin(BaseMetadataProvider):
         "sessions": "all",
     }
 
-    # 5개 소스 세트 config_schema 구성
-    # (아래 키 이름은 get_dashboard_data/apply의 저장 형식과 정확히 맞춰져 있어야 한다)
+    # 5개 소스 세트 config_schema 구성.
+    # ⚠️ 이제 이 값들은 "최초 설치 시 1회 시드"로만 쓰인다 - 실제 진짜 저장소는
+    # sources.json 파일이다. 자세한 내용은 파일 상단 docstring 참고.
     config_schema = [
         # Set 1 (기본: 개인 소스)
         {"key": "ENABLE_1", "label": "[세트 1] 활성화", "type": "checkbox", "default": True},
@@ -108,8 +129,8 @@ class M3UPlayerPlugin(BaseMetadataProvider):
     # ------------------------------------------------------------------
     @staticmethod
     def _slots_from_config(config):
-        """get_plugin_config()가 돌려준 dict(config_schema 키 형식)를
-        프론트(script.js)가 쓰는 slots 배열 형식으로 변환한다."""
+        """config dict(config_schema 키 형식)를 프론트(script.js)가 쓰는
+        slots 배열 형식으로 변환한다."""
         config = config or {}
         slots = []
         for i in range(1, 6):
@@ -125,9 +146,7 @@ class M3UPlayerPlugin(BaseMetadataProvider):
     @staticmethod
     def _config_from_slots(slots):
         """slots 배열을 config_schema와 동일한 키의 dict로 변환한다.
-        set_plugin_config()가 부분 병합이 아니라 전체 덮어쓰기일 가능성이 있으므로
-        (plugin_hub 개발 시 관리자 설정 저장 API가 전체 오버라이트임을 확인한 바 있음)
-        항상 20개 키를 빠짐없이 채워서 반환한다."""
+        (sources.json에는 항상 이 형태로 20개 키를 빠짐없이 저장한다.)"""
         config = {}
         for i in range(1, 6):
             idx = i - 1
@@ -140,11 +159,54 @@ class M3UPlayerPlugin(BaseMetadataProvider):
         return config
 
     # ------------------------------------------------------------------
+    # 파일 기반 설정 저장소 (./plugins/data/m3u_player/sources.json)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_config_from_file():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError):
+            # 파일이 손상됐거나 읽기 실패 - 시드 값으로 새로 만들도록 None 처리
+            return None
+
+    @staticmethod
+    def _save_config_to_file(config):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = CONFIG_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        # 원자적 교체: 쓰는 도중 프로세스가 죽어도 기존 파일이 반쪽짜리로
+        # 깨지지 않도록 임시 파일에 다 쓴 뒤 한 번에 이름을 바꾼다.
+        os.replace(tmp_path, CONFIG_FILE)
+
+    def _load_config_with_db_seed(self, db_type):
+        """sources.json을 읽되, 파일이 아직 없으면(최초 설치 직후) 관리자
+        설정 화면(config_schema, DB)의 값을 1회 시드로 읽어와 파일에도 저장한다."""
+        config = self._load_config_from_file()
+        if config is not None:
+            return config
+
+        try:
+            gateway = self.get_db_gateway(CONFIG_SCOPE)
+            config = gateway.get_plugin_config(self.id, default={}) or {}
+        except Exception:
+            config = {}
+
+        try:
+            self._save_config_to_file(config)
+        except OSError:
+            pass  # 시드 저장에 실패해도 이번 응답 자체는 정상 반환한다
+
+        return config
+
+    # ------------------------------------------------------------------
     # 카테고리탭 데이터 조회 (GET .../widgets/m3u_player/data?type=...)
     # ------------------------------------------------------------------
     def get_dashboard_data(self, db_type, limit=None):
-        gateway = self.get_db_gateway(CONFIG_SCOPE)
-        config = gateway.get_plugin_config(self.id, default={}) or {}
+        config = self._load_config_with_db_seed(db_type)
         return {"slots": self._slots_from_config(config)}
 
     # ------------------------------------------------------------------
@@ -159,6 +221,9 @@ class M3UPlayerPlugin(BaseMetadataProvider):
             return False, "저장할 소스 정보가 없습니다."
 
         config = self._config_from_slots(slots)
-        gateway = self.get_db_gateway(CONFIG_SCOPE)
-        gateway.set_plugin_config(self.id, config)
-        return True, "M3U 소스 설정이 저장되었습니다."
+        try:
+            self._save_config_to_file(config)
+        except OSError as e:
+            return False, f"설정 파일 저장 실패: {e}"
+
+        return True, "M3U 소스 설정이 저장되었습니다. (plugins/data/m3u_player/sources.json)"
