@@ -148,21 +148,46 @@
         return `/api/webview/logo-cache?url=${encodeURIComponent(rawUrl)}`;
     }
 
-    // 📺 다른 사이드바 메뉴로 이동하면(=이 카테고리탭의 루트 DOM이 문서에서 제거되면) 재생을 정지한다.
-    // 단, 사용자가 PIP(Picture-in-Picture)로 이 영상을 띄워둔 상태라면 정지하지 않고 그대로 유지하며,
-    // 사용자가 PIP 창을 직접 닫는 시점(leavepictureinpicture)에 비로소 정리한다.
-    // BookOasis SPA가 탭을 전환할 때 이 컨테이너를 DOM에서 어떻게 치우는지(교체 vs 숨김) 정확한 계약이
-    // 문서화돼 있지 않아, 프레임워크에 의존하지 않는 범용적인 방식(MutationObserver로 DOM 이탈 감지)을 쓴다.
+    // 📺 다른 사이드바 메뉴로 이동하면(=이 카테고리탭이 DOM에서 제거되거나, class/style로 숨겨지면)
+    // 재생을 정지한다. 단, 사용자가 PIP(Picture-in-Picture)로 이 영상을 띄워둔 상태라면 정지하지 않고
+    // 그대로 유지하며, 사용자가 PIP 창을 직접 닫는 시점(leavepictureinpicture)에 비로소 정리한다.
+    // BookOasis SPA가 탭을 전환할 때 이 컨테이너를 정확히 어떻게 처리하는지(완전 제거 vs class/style로
+    // 숨김) 문서화돼 있지 않아, 두 가지 경우를 모두 잡는 범용적인 방식을 쓴다:
+    //  1) childList 변화 -> 컨테이너 자체가 DOM에서 완전히 제거되는 경우
+    //  2) class/style 속성 변화 -> 컨테이너 자신 또는 조상 엘리먼트에 hidden 처리(예: display:none,
+    //     visibility:hidden, "hidden" 류 클래스)가 적용되는 경우
+    function isHiddenFromView(el) {
+        if (!document.body.contains(el)) return true; // 완전히 제거됨
+
+        let node = el;
+        while (node && node !== document.body) {
+            const cs = getComputedStyle(node);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+            node = node.parentElement;
+        }
+        // display:none/visibility:hidden이 아니어도 offsetParent가 null이면(대부분의 경우)
+        // 화면에 렌더링되지 않는 상태로 간주한다 (position:fixed 엘리먼트는 예외 처리).
+        if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return true;
+        return false;
+    }
+
     function setupNavigationCleanupObserver() {
         const rootEl = document.querySelector('.m3u-root');
         if (!rootEl || !rootEl.parentNode) return;
 
-        navigationObserver = new MutationObserver(() => {
-            if (!document.body.contains(rootEl)) {
+        const checkAndHandle = () => {
+            if (isHiddenFromView(rootEl)) {
                 handleContainerRemoved();
             }
+        };
+
+        navigationObserver = new MutationObserver(checkAndHandle);
+        navigationObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style']
         });
-        navigationObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     function handleContainerRemoved() {
