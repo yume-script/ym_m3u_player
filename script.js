@@ -5,12 +5,16 @@
     let mpegtsPlayer = null;
     let allChannels = [];
     let activeChannel = null;
-    let epgProgrammes = {}; // { [channelId]: [ { start, stop, title } ] }
+    let epgProgrammes = {};
     let favorites = new Set(JSON.parse(localStorage.getItem('m3u_fav_channels') || '[]'));
+    
+    // 스트림 상태 맵 (online, offline, checking, unknown)
+    let channelHealth = JSON.parse(sessionStorage.getItem('m3u_channel_health') || '{}');
+    let isHealthChecking = false;
+
     let timerInterval = null;
     let osdTimeout = null;
 
-    // 기본 5개 세트 템플릿
     let sourceSlots = [
         { enabled: true, name: '개인', m3u: '', epg: '' },
         { enabled: false, name: 'iptv-org', m3u: 'https://iptv-org.github.io/iptv/countries/kr.m3u', epg: 'https://iptv-org.github.io/epg/guides/kr.xml' },
@@ -29,8 +33,10 @@
     const searchInput = document.getElementById('m3uSearchInput');
     const epgStatusEl = document.getElementById('m3uEpgStatus');
     const activeSourcesBar = document.getElementById('m3uActiveSourcesBar');
+    const onlyOnlineToggle = document.getElementById('m3uOnlyOnlineToggle');
+    const healthCheckBtn = document.getElementById('m3uHealthCheckBtn');
 
-    // Toolbar & Modals
+    // Modals
     const openSourceModalBtn = document.getElementById('m3uOpenSourceModalBtn');
     const closeSourceModalBtn = document.getElementById('m3uCloseSourceModalBtn');
     const sourceModal = document.getElementById('m3uSourceModal');
@@ -79,7 +85,6 @@
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
 
-        // 1. 소스 불러오기 (로컬 스토리지 -> 없으면 서버 config 확인)
         const savedSources = localStorage.getItem('m3u_source_slots_v2');
         if (savedSources) {
             try { sourceSlots = JSON.parse(savedSources); } catch (e) {}
@@ -87,7 +92,6 @@
             await syncServerSources();
         }
 
-        // 2. 전체 활성 소스 병렬 로드 시작
         loadAllSources();
     }
 
@@ -117,9 +121,11 @@
         closeSourceModalBtn.addEventListener('click', () => sourceModal.classList.add('hidden'));
         saveSourcesBtn.addEventListener('click', saveSourcesFromModal);
         reloadAllBtn.addEventListener('click', loadAllSources);
+        healthCheckBtn.addEventListener('click', startHealthCheckBatch);
 
         searchInput.addEventListener('input', renderFilteredChannels);
         groupSelectEl.addEventListener('change', renderFilteredChannels);
+        onlyOnlineToggle.addEventListener('change', renderFilteredChannels);
 
         favCurrentBtn.addEventListener('click', toggleCurrentFavorite);
         openScheduleBtn.addEventListener('click', openScheduleView);
@@ -162,7 +168,7 @@
         currentFavIcon.className = favorites.has(id) ? 'fa-solid fa-star' : 'fa-regular fa-star';
     }
 
-    // 소스 관리 모달 렌더링
+    // 소스 관리 모달
     function openSourceModal() {
         sourceSlotsContainer.innerHTML = '';
         sourceSlots.forEach((slot, i) => {
@@ -174,13 +180,13 @@
                         <input type="checkbox" id="slot_enable_${i}" ${slot.enabled ? 'checked' : ''}>
                         <span>세트 ${i + 1}</span>
                     </label>
-                    <input type="text" id="slot_name_${i}" class="m3u-input m3u-slot-name-input" value="${slot.name}" placeholder="태그 (예: 개인)">
+                    <input type="text" id="slot_name_${i}" class="m3u-input m3u-slot-name-input" value="${slot.name}" placeholder="태그">
                 </div>
                 <div class="m3u-slot-url-row">
-                    <input type="text" id="slot_m3u_${i}" class="m3u-input" value="${slot.m3u}" placeholder="M3U URL (http://...)">
+                    <input type="text" id="slot_m3u_${i}" class="m3u-input" value="${slot.m3u}" placeholder="M3U URL">
                 </div>
                 <div class="m3u-slot-url-row">
-                    <input type="text" id="slot_epg_${i}" class="m3u-input" value="${slot.epg}" placeholder="EPG XML URL (선택)">
+                    <input type="text" id="slot_epg_${i}" class="m3u-input" value="${slot.epg}" placeholder="EPG URL">
                 </div>
             `;
             sourceSlotsContainer.appendChild(card);
@@ -202,7 +208,7 @@
         loadAllSources();
     }
 
-    // 5개 소스 병렬 로드 및 통합 머지 로직
+    // 전체 로드
     async function loadAllSources() {
         setOverlay('전체 M3U 소스를 불러오는 중...', true);
         activeSourcesBar.innerHTML = '';
@@ -218,7 +224,6 @@
             return;
         }
 
-        // 상단 활성 소스 뱃지 출력
         activeSlots.forEach(s => {
             const badge = document.createElement('span');
             badge.className = 'm3u-source-tag';
@@ -226,7 +231,7 @@
             activeSourcesBar.appendChild(badge);
         });
 
-        // 1. EPG 파일들 병렬 로드
+        // EPG 로드
         const epgPromises = activeSlots.filter(s => s.epg).map(s => loadEPGFile(s.epg, s.name));
         Promise.allSettled(epgPromises).then(results => {
             const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
@@ -236,7 +241,7 @@
             updateLiveProgress();
         });
 
-        // 2. M3U 재생목록 파일들 병렬 로드
+        // M3U 로드
         const m3uPromises = activeSlots.map(s => loadM3UFile(s.m3u, s.name));
         const m3uResults = await Promise.allSettled(m3uPromises);
 
@@ -250,7 +255,6 @@
         allChannels = mergedChannels;
         channelCountEl.textContent = allChannels.length;
 
-        // 그룹 셀렉터 재구성
         const groups = new Set();
         allChannels.forEach(c => { if (c.group) groups.add(c.group); });
 
@@ -280,7 +284,6 @@
             const text = await res.text();
             return parseM3U(text, sourceName);
         } catch (e) {
-            console.error(`[M3UPlayer] Failed to load M3U (${sourceName}):`, e);
             return [];
         }
     }
@@ -293,12 +296,10 @@
             parseXMLTV(xmlText);
             return true;
         } catch (e) {
-            console.error(`[M3UPlayer] Failed to load EPG (${sourceName}):`, e);
             return false;
         }
     }
 
-    // M3U 파서 (출처 태그 적용)
     function parseM3U(content, sourceName) {
         const lines = content.split(/\r?\n/);
         const channels = [];
@@ -332,7 +333,7 @@
                     const name = line.substring(commaIdx + 1).trim();
                     if (name) currentInfo.name = name;
                 }
-                if (!currentInfo.id) currentInfo.id = currentInfo.name;
+                if (!currentInfo.id) currentInfo.id = `${sourceName}_${currentInfo.name}`;
             } else if (!line.startsWith('#') && currentInfo) {
                 currentInfo.url = line;
                 channels.push(currentInfo);
@@ -342,7 +343,6 @@
         return channels;
     }
 
-    // EPG 파서
     function parseXMLTV(xmlText) {
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
@@ -416,6 +416,167 @@
         return { current, next, progress, timeText, remainText };
     }
 
+    // 🩺 사전 스트림 헬스체크 (동시 4개씩 백그라운드 핑)
+    async function startHealthCheckBatch() {
+        if (isHealthChecking) return;
+        isHealthChecking = true;
+        healthCheckBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 점검 중...';
+
+        const queue = [...allChannels];
+        const concurrency = 4;
+
+        async function worker() {
+            while (queue.length > 0) {
+                const ch = queue.shift();
+                const key = ch.id || ch.url;
+                channelHealth[key] = 'checking';
+                renderFilteredChannels();
+
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 2500); // 2.5초 타임아웃
+                    const res = await fetch(ch.url, { method: 'GET', signal: controller.signal, headers: { 'Range': 'bytes=0-50' } });
+                    clearTimeout(timeoutId);
+
+                    if (res.ok || res.status === 206) {
+                        channelHealth[key] = 'online';
+                    } else {
+                        channelHealth[key] = 'offline';
+                    }
+                } catch (e) {
+                    channelHealth[key] = 'offline';
+                }
+            }
+        }
+
+        const workers = Array(concurrency).fill(null).map(() => worker());
+        await Promise.all(workers);
+
+        isHealthChecking = false;
+        healthCheckBtn.innerHTML = '<i class="fa-solid fa-stethoscope"></i> 상태 점검';
+        sessionStorage.setItem('m3u_channel_health', JSON.stringify(channelHealth));
+        renderFilteredChannels();
+    }
+
+    function setChannelStatus(channel, status) {
+        if (!channel) return;
+        const key = channel.id || channel.url;
+        channelHealth[key] = status;
+        sessionStorage.setItem('m3u_channel_health', JSON.stringify(channelHealth));
+        renderFilteredChannels();
+    }
+
+    function renderFilteredChannels() {
+        const keyword = searchInput.value.toLowerCase().trim();
+        const selectedGroup = groupSelectEl.value;
+        const onlyOnline = onlyOnlineToggle.checked;
+
+        const filtered = allChannels.filter(c => {
+            const chId = c.id || c.name;
+            const statusKey = c.id || c.url;
+            const status = channelHealth[statusKey] || 'unknown';
+
+            // 정상 채널 전용 필터 적용 시
+            if (onlyOnline && status === 'offline') return false;
+
+            if (selectedGroup === '__FAVORITES__' && !favorites.has(chId)) return false;
+            const matchesGroup = !selectedGroup || selectedGroup === '__FAVORITES__' || c.group === selectedGroup;
+            const epg = getEPGInfo(c);
+            const progTitle = epg.current ? epg.current.title.toLowerCase() : '';
+            const matchesKeyword = !keyword || c.name.toLowerCase().includes(keyword) || c.group.toLowerCase().includes(keyword) || progTitle.includes(keyword);
+            return matchesGroup && matchesKeyword;
+        });
+
+        channelListEl.innerHTML = '';
+        if (filtered.length === 0) {
+            channelListEl.innerHTML = '<div class="m3u-empty-state">검색/필터 결과가 없습니다.</div>';
+            return;
+        }
+
+        filtered.forEach(ch => {
+            const statusKey = ch.id || ch.url;
+            const status = channelHealth[statusKey] || 'unknown';
+            const isOffline = status === 'offline';
+
+            const item = document.createElement('div');
+            item.className = 'm3u-channel-item' + 
+                             (activeChannel === ch ? ' active' : '') + 
+                             (isOffline ? ' is-offline' : '');
+
+            // 상태등 (Dot)
+            const dot = document.createElement('span');
+            dot.className = `m3u-status-dot ${status}`;
+            dot.title = isOffline ? '재생 불가/오프라인' : (status === 'online' ? '정상 스트림' : '미확인');
+            item.appendChild(dot);
+
+            // 로고
+            const logoBox = document.createElement('div');
+            logoBox.className = 'm3u-logo-box';
+            if (ch.logo) {
+                const img = document.createElement('img');
+                img.className = 'm3u-ch-logo';
+                img.src = ch.logo;
+                img.loading = 'lazy';
+                img.onerror = () => { logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>'; };
+                logoBox.appendChild(img);
+            } else {
+                logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>';
+            }
+
+            const epg = getEPGInfo(ch);
+            const info = document.createElement('div');
+            info.className = 'm3u-ch-info';
+
+            const name = document.createElement('div');
+            name.className = 'm3u-ch-name';
+            name.textContent = ch.name;
+
+            const epgRow = document.createElement('div');
+            epgRow.className = 'm3u-ch-epg-row';
+
+            const epgText = document.createElement('span');
+            epgText.className = 'm3u-ch-epg';
+            epgText.textContent = isOffline ? '⚠️ 재생 불가 (오프라인)' : (epg.current ? epg.current.title : (ch.group || 'Live'));
+
+            const epgTime = document.createElement('span');
+            epgTime.className = 'm3u-ch-time';
+            epgTime.textContent = epg.current ? `${Math.round(epg.progress)}%` : '';
+
+            epgRow.appendChild(epgText);
+            epgRow.appendChild(epgTime);
+
+            const miniBar = document.createElement('div');
+            miniBar.className = 'm3u-ch-mini-bar';
+            const miniFill = document.createElement('div');
+            miniFill.className = 'm3u-ch-mini-fill';
+            miniFill.style.width = `${epg.progress}%`;
+            miniBar.appendChild(miniFill);
+
+            info.appendChild(name);
+            info.appendChild(epgRow);
+            if (epg.current && !isOffline) info.appendChild(miniBar);
+
+            const chId = ch.id || ch.name;
+            const star = document.createElement('i');
+            star.className = `m3u-fav-star fa-star ${favorites.has(chId) ? 'fa-solid active' : 'fa-regular'}`;
+            star.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (favorites.has(chId)) favorites.delete(chId);
+                else favorites.add(chId);
+                localStorage.setItem('m3u_fav_channels', JSON.stringify(Array.from(favorites)));
+                renderFilteredChannels();
+                updateFavIcon();
+            });
+
+            item.appendChild(logoBox);
+            item.appendChild(info);
+            item.appendChild(star);
+
+            item.addEventListener('click', () => playStream(ch));
+            channelListEl.appendChild(item);
+        });
+    }
+
     function updateLiveProgress() {
         if (!activeChannel) return;
         const info = getEPGInfo(activeChannel);
@@ -483,97 +644,7 @@
         osdTimeout = setTimeout(() => { tvOsdEl.classList.add('hidden'); }, 3500);
     }
 
-    function renderFilteredChannels() {
-        const keyword = searchInput.value.toLowerCase().trim();
-        const selectedGroup = groupSelectEl.value;
-
-        const filtered = allChannels.filter(c => {
-            const chId = c.id || c.name;
-            if (selectedGroup === '__FAVORITES__' && !favorites.has(chId)) return false;
-            const matchesGroup = !selectedGroup || selectedGroup === '__FAVORITES__' || c.group === selectedGroup;
-            const epg = getEPGInfo(c);
-            const progTitle = epg.current ? epg.current.title.toLowerCase() : '';
-            const matchesKeyword = !keyword || c.name.toLowerCase().includes(keyword) || c.group.toLowerCase().includes(keyword) || progTitle.includes(keyword);
-            return matchesGroup && matchesKeyword;
-        });
-
-        channelListEl.innerHTML = '';
-        if (filtered.length === 0) {
-            channelListEl.innerHTML = '<div class="m3u-empty-state">검색 결과가 없습니다.</div>';
-            return;
-        }
-
-        filtered.forEach(ch => {
-            const item = document.createElement('div');
-            item.className = 'm3u-channel-item' + (activeChannel === ch ? ' active' : '');
-
-            const logoBox = document.createElement('div');
-            logoBox.className = 'm3u-logo-box';
-            if (ch.logo) {
-                const img = document.createElement('img');
-                img.className = 'm3u-ch-logo';
-                img.src = ch.logo;
-                img.loading = 'lazy';
-                img.onerror = () => { logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>'; };
-                logoBox.appendChild(img);
-            } else {
-                logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>';
-            }
-
-            const epg = getEPGInfo(ch);
-            const info = document.createElement('div');
-            info.className = 'm3u-ch-info';
-
-            const name = document.createElement('div');
-            name.className = 'm3u-ch-name';
-            name.textContent = ch.name;
-
-            const epgRow = document.createElement('div');
-            epgRow.className = 'm3u-ch-epg-row';
-
-            const epgText = document.createElement('span');
-            epgText.className = 'm3u-ch-epg';
-            epgText.textContent = epg.current ? epg.current.title : (ch.group || 'Live');
-
-            const epgTime = document.createElement('span');
-            epgTime.className = 'm3u-ch-time';
-            epgTime.textContent = epg.current ? `${Math.round(epg.progress)}%` : '';
-
-            epgRow.appendChild(epgText);
-            epgRow.appendChild(epgTime);
-
-            const miniBar = document.createElement('div');
-            miniBar.className = 'm3u-ch-mini-bar';
-            const miniFill = document.createElement('div');
-            miniFill.className = 'm3u-ch-mini-fill';
-            miniFill.style.width = `${epg.progress}%`;
-            miniBar.appendChild(miniFill);
-
-            info.appendChild(name);
-            info.appendChild(epgRow);
-            if (epg.current) info.appendChild(miniBar);
-
-            const chId = ch.id || ch.name;
-            const star = document.createElement('i');
-            star.className = `m3u-fav-star fa-star ${favorites.has(chId) ? 'fa-solid active' : 'fa-regular'}`;
-            star.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (favorites.has(chId)) favorites.delete(chId);
-                else favorites.add(chId);
-                localStorage.setItem('m3u_fav_channels', JSON.stringify(Array.from(favorites)));
-                renderFilteredChannels();
-                updateFavIcon();
-            });
-
-            item.appendChild(logoBox);
-            item.appendChild(info);
-            item.appendChild(star);
-
-            item.addEventListener('click', () => playStream(ch));
-            channelListEl.appendChild(item);
-        });
-    }
-
+    // 스트림 재생 및 실패 시 오프라인 자동 마킹
     function playStream(channel) {
         activeChannel = channel;
         currentTitleEl.textContent = channel.name;
@@ -595,28 +666,51 @@
                 mpegtsPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url: streamUrl });
                 mpegtsPlayer.attachMediaElement(videoEl);
                 mpegtsPlayer.load();
-                mpegtsPlayer.play().then(() => setOverlay('', false)).catch(() => {});
-            } catch (e) { fallbackPlay(streamUrl); }
+                mpegtsPlayer.play().then(() => {
+                    setOverlay('', false);
+                    setChannelStatus(channel, 'online');
+                }).catch(() => {
+                    setChannelStatus(channel, 'offline');
+                });
+            } catch (e) {
+                setChannelStatus(channel, 'offline');
+                fallbackPlay(streamUrl, channel);
+            }
         } else if (window.Hls && window.Hls.isSupported()) {
             engineBadgeEl.textContent = 'HLS';
             hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: true });
             hlsInstance.loadSource(streamUrl);
             hlsInstance.attachMedia(videoEl);
+
             hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
                 setOverlay('', false);
+                setChannelStatus(channel, 'online');
                 videoEl.play().catch(() => {});
             });
+
+            hlsInstance.on(window.Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    setChannelStatus(channel, 'offline');
+                    setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
+                }
+            });
         } else {
-            fallbackPlay(streamUrl);
+            fallbackPlay(streamUrl, channel);
         }
 
         renderFilteredChannels();
     }
 
-    function fallbackPlay(url) {
+    function fallbackPlay(url, channel) {
         engineBadgeEl.textContent = 'DIRECT';
         videoEl.src = url;
-        videoEl.play().then(() => setOverlay('', false)).catch(() => {});
+        videoEl.play().then(() => {
+            setOverlay('', false);
+            setChannelStatus(channel, 'online');
+        }).catch(() => {
+            setChannelStatus(channel, 'offline');
+            setOverlay('재생할 수 없는 스트림입니다.', true);
+        });
     }
 
     function openScheduleView() {

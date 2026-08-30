@@ -15,7 +15,7 @@
     position: relative;
 }
 
-/* 좌측 비디오 */
+/* 좌측 플레이어 */
 .m3u-player-section {
     display: flex !important;
     flex-direction: column !important;
@@ -154,28 +154,10 @@
     overflow: hidden;
 }
 
-.m3u-toolbar-row {
-    display: flex;
-    gap: 0.4rem;
-    margin-bottom: 0.5rem;
-}
+.m3u-toolbar-row { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
 
-.m3u-active-sources-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    margin-bottom: 0.6rem;
-}
-
-.m3u-source-tag {
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    background: rgba(99, 102, 241, 0.15);
-    color: #818cf8;
-    border: 1px solid rgba(99, 102, 241, 0.3);
-}
+.m3u-active-sources-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
+.m3u-source-tag { font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
 
 .m3u-input, .m3u-select {
     width: 100%;
@@ -194,10 +176,19 @@
 .m3u-search-wrap i { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--app-text-muted, #94a3b8); font-size: 0.8rem; }
 .m3u-search-wrap input { padding-left: 2rem !important; }
 
+.m3u-filter-sub-row { display: flex; align-items: center; gap: 0.5rem; }
+.m3u-online-only-toggle {
+    display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; font-weight: 600;
+    color: var(--app-text-muted); cursor: pointer; white-space: nowrap; user-select: none;
+}
+.m3u-online-only-toggle input { cursor: pointer; }
+
 .m3u-count-bar { display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--app-text-muted, #94a3b8); padding: 0.3rem 0; border-bottom: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.08)); margin-bottom: 0.4rem; }
 .m3u-epg-status { font-size: 0.73rem; color: #10b981; }
 
 .m3u-list-scroll { flex: 1; overflow-y: auto !important; display: flex; flex-direction: column; gap: 0.35rem; padding-right: 0.25rem; }
+
+/* 채널 카드 & 상태 점(Dot) 스타일 */
 .m3u-channel-item {
     display: flex !important;
     align-items: center !important;
@@ -208,10 +199,37 @@
     border: 1px solid var(--app-border, rgba(255, 255, 255, 0.08));
     cursor: pointer;
     transition: all 0.15s ease;
+    position: relative;
 }
 .m3u-channel-item:hover { background: var(--app-bg-card-hover, #334155); border-color: var(--app-accent, #6366f1); }
 .m3u-channel-item.active { background: var(--app-accent, #6366f1) !important; border-color: var(--app-accent, #6366f1) !important; }
 .m3u-channel-item.active .m3u-ch-name, .m3u-channel-item.active .m3u-ch-epg, .m3u-channel-item.active .m3u-fallback-icon, .m3u-channel-item.active .m3u-ch-time { color: #ffffff !important; }
+
+/* 🔴 오프라인(재생 불가) 채널 스타일 */
+.m3u-channel-item.is-offline {
+    opacity: 0.45 !important;
+    filter: grayscale(0.6);
+}
+.m3u-channel-item.is-offline:hover {
+    opacity: 0.8 !important;
+}
+
+/* 상태등 Dot */
+.m3u-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.m3u-status-dot.online { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.8); }
+.m3u-status-dot.offline { background: #ef4444; box-shadow: 0 0 4px rgba(239, 68, 68, 0.6); }
+.m3u-status-dot.checking { background: #f59e0b; animation: pulseDot 1s infinite; }
+.m3u-status-dot.unknown { background: #64748b; }
+
+@keyframes pulseDot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
 
 .m3u-logo-box { width: 44px !important; height: 30px !important; min-width: 44px !important; min-height: 30px !important; background: rgba(0, 0, 0, 0.25); border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden !important; flex-shrink: 0 !important; }
 .m3u-ch-logo { width: 100% !important; height: 100% !important; max-width: 44px !important; max-height: 30px !important; object-fit: contain !important; }
@@ -227,7 +245,7 @@
 .m3u-fav-star { font-size: 0.9rem; color: var(--app-text-muted, #64748b); padding: 0.2rem; cursor: pointer; }
 .m3u-fav-star.active { color: #fbbf24; }
 
-/* 소스 관리 모달 폼 스타일 */
+/* 모달 */
 .m3u-modal { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.8); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .m3u-modal.hidden { display: none !important; }
 .m3u-modal-content { background: var(--app-bg-card, #1e293b); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15)); border-radius: 12px; width: 540px; max-width: 95%; max-height: 85vh; display: flex; flex-direction: column; }
@@ -240,15 +258,7 @@
 .m3u-modal-footer { padding: 1rem 1.25rem; border-top: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.1)); }
 
 .m3u-source-slots { display: flex; flex-direction: column; gap: 0.8rem; }
-.m3u-source-slot-card {
-    background: var(--app-bg-main, #0f172a);
-    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.1));
-    border-radius: 8px;
-    padding: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-}
+.m3u-source-slot-card { background: var(--app-bg-main, #0f172a); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.1)); border-radius: 8px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.45rem; }
 .m3u-slot-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .m3u-slot-enable-wrap { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; font-weight: 700; }
 .m3u-slot-name-input { width: 140px !important; padding: 0.3rem 0.5rem !important; font-size: 0.8rem !important; }
@@ -263,6 +273,8 @@
 .m3u-btn-primary:hover { background: var(--app-accent-hover, #4f46e5); }
 .m3u-btn-secondary { background: #0ea5e9; color: #ffffff; }
 .m3u-btn-secondary:hover { background: #0284c7; }
+.m3u-btn-outline { background: var(--app-bg-sidebar, #0f172a); color: var(--app-text-primary, #ffffff); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15)); }
+.m3u-btn-outline:hover { background: var(--app-bg-card-hover, #334155); }
 
 .m3u-schedule-item { display: flex; gap: 0.8rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--app-bg-main, #0f172a); font-size: 0.85rem; }
 .m3u-schedule-item.current { border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.12); }

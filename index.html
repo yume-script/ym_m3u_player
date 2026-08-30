@@ -1,6 +1,6 @@
 <!-- plugins/metadata/m3u_player/index.html -->
 <div class="m3u-root">
-    <!-- [좌측] 비디오 플레이어 및 EPG 타임라인 영역 -->
+    <!-- [좌측] 비디오 플레이어 영역 -->
     <section class="m3u-player-section">
         <div class="m3u-video-wrapper" id="m3uVideoWrapper">
             <video id="m3uVideoPlayer" controls playsinline></video>
@@ -80,31 +80,39 @@
 
     <!-- [우측] 사이드바 -->
     <aside class="m3u-sidebar-section">
-        <!-- 툴바: 소스 관리 모달 열기 & 전체 새로고침 -->
+        <!-- 툴바: 소스 관리 / 사전 점검 / 새로고침 -->
         <div class="m3u-toolbar-row">
             <button id="m3uOpenSourceModalBtn" class="m3u-btn m3u-btn-primary" style="flex:1;">
-                <i class="fa-solid fa-layer-group"></i> ⚙️ 소스 관리 (5세트)
+                <i class="fa-solid fa-layer-group"></i> ⚙️ 소스 관리
             </button>
-            <button id="m3uReloadAllBtn" class="m3u-btn m3u-btn-secondary" title="전체 소스 다시 불러오기">
+            <button id="m3uHealthCheckBtn" class="m3u-btn m3u-btn-secondary" title="사전 스트림 상태 점검">
+                <i class="fa-solid fa-stethoscope"></i> 상태 점검
+            </button>
+            <button id="m3uReloadAllBtn" class="m3u-btn m3u-btn-outline" title="새로고침">
                 <i class="fa-solid fa-rotate-right"></i>
             </button>
         </div>
 
-        <!-- 활성 소스 뱃지 바 -->
-        <div id="m3uActiveSourcesBar" class="m3u-active-sources-bar">
-            <!-- 활성화된 소스 태그가 동적 생성됨 -->
-        </div>
+        <!-- 활성 소스 뱃지 -->
+        <div id="m3uActiveSourcesBar" class="m3u-active-sources-bar"></div>
 
-        <!-- 검색 & 그룹 필터 -->
+        <!-- 검색 & 그룹 필터 & 정상 채널 전용 토글 -->
         <div class="m3u-filter-panel">
             <div class="m3u-search-wrap">
                 <i class="fa-solid fa-magnifying-glass"></i>
                 <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 / 프로그램 검색...">
             </div>
-            <select id="m3uGroupSelect" class="m3u-select">
-                <option value="">전체 그룹 (All)</option>
-                <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
-            </select>
+            
+            <div class="m3u-filter-sub-row">
+                <select id="m3uGroupSelect" class="m3u-select" style="flex:1;">
+                    <option value="">전체 그룹 (All)</option>
+                    <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
+                </select>
+                <label class="m3u-online-only-toggle" title="재생 불가/오프라인 채널 숨기기">
+                    <input type="checkbox" id="m3uOnlyOnlineToggle">
+                    <span>🟢 정상만</span>
+                </label>
+            </div>
         </div>
 
         <div class="m3u-count-bar">
@@ -127,9 +135,7 @@
             </div>
             <div class="m3u-modal-body">
                 <p class="m3u-modal-desc">혼용할 M3U와 EPG 주소를 등록하고 활성화 체크박스를 켜주세요.</p>
-                <div id="m3uSourceSlotsContainer" class="m3u-source-slots">
-                    <!-- 5개 세트 입력폼이 JS로 동적 생성됨 -->
-                </div>
+                <div id="m3uSourceSlotsContainer" class="m3u-source-slots"></div>
             </div>
             <div class="m3u-modal-footer">
                 <button id="m3uSaveSourcesBtn" class="m3u-btn m3u-btn-primary" style="width: 100%;">
@@ -139,7 +145,7 @@
         </div>
     </div>
 
-    <!-- [모달 2] 당일 전체 편성표 모달 -->
+    <!-- [모달 2] 편성표 모달 -->
     <div id="m3uScheduleModal" class="m3u-modal hidden">
         <div class="m3u-modal-content">
             <div class="m3u-modal-header">
