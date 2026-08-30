@@ -1,6 +1,6 @@
 <!-- plugins/metadata/m3u_player/index.html -->
 <div class="m3u-root">
-    <!-- [좌측] 비디오 플레이어 영역 -->
+    <!-- [좌측] 비디오 플레이어 및 EPG 정보 영역 -->
     <section class="m3u-player-section">
         <div class="m3u-video-wrapper">
             <video id="m3uVideoPlayer" controls playsinline></video>
@@ -10,33 +10,48 @@
             </div>
         </div>
         
-        <!-- 현재 재생 정보 바 -->
+        <!-- 현재 재생 채널 및 EPG 정보 바 -->
         <div class="m3u-playing-bar">
             <div class="m3u-badge">ON AIR</div>
             <div class="m3u-playing-text">
-                <div id="m3uCurrentChannelTitle" class="m3u-title">재생 중인 채널이 없습니다</div>
-                <div id="m3uCurrentChannelGroup" class="m3u-group">M3U IPTV Player</div>
+                <div class="m3u-title-row">
+                    <span id="m3uCurrentChannelTitle" class="m3u-title">재생 중인 채널이 없습니다</span>
+                    <span id="m3uCurrentChannelGroup" class="m3u-group-badge">M3U</span>
+                </div>
+                <!-- 실시간 EPG 정보 표시 -->
+                <div id="m3uCurrentEpgInfo" class="m3u-epg-now">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <span id="m3uCurrentEpgText">편성표 정보 없음</span>
+                </div>
             </div>
         </div>
     </section>
 
-    <!-- [우측] 채널 탐색 및 제어 사이드바 -->
+    <!-- [우측] 사이드바 (M3U/EPG 설정, 채널 검색 및 목록) -->
     <aside class="m3u-sidebar-section">
-        <!-- URL 입력 및 파일 업로드 툴바 -->
+        <!-- 상단 URL 입력 및 빠른 설정 토글 -->
         <div class="m3u-toolbar">
             <div class="m3u-url-row">
-                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U 주소 입력 (http://...)">
-                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary">
+                <input type="text" id="m3uUrlInput" class="m3u-input" placeholder="M3U URL 입력 (http://...)">
+                <button id="m3uLoadBtn" class="m3u-btn m3u-btn-primary" title="M3U 목록 로드">
                     <i class="fa-solid fa-cloud-arrow-down"></i> 로드
                 </button>
             </div>
+
+            <div class="m3u-url-row">
+                <input type="text" id="m3uEpgInput" class="m3u-input" placeholder="EPG (XMLTV) URL 입력 (선택)">
+                <button id="m3uEpgLoadBtn" class="m3u-btn m3u-btn-secondary" title="EPG 편성표 로드">
+                    <i class="fa-solid fa-table-list"></i> EPG
+                </button>
+            </div>
+
             <div class="m3u-btn-row">
-                <label class="m3u-btn m3u-btn-outline m3u-file-btn">
+                <label class="m3u-btn m3u-btn-outline m3u-file-btn" title="로컬 M3U 파일 열기">
                     <i class="fa-solid fa-folder-open"></i> 파일 열기
                     <input type="file" id="m3uFileInput" accept=".m3u,.m3u8" style="display:none;">
                 </label>
-                <button id="m3uDirectPlayBtn" class="m3u-btn m3u-btn-outline">
-                    <i class="fa-solid fa-play"></i> 단일 URL 재생
+                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline" title="현재 입력된 주소를 기본값으로 저장">
+                    <i class="fa-solid fa-bookmark"></i> 기본값 저장
                 </button>
             </div>
         </div>
@@ -45,19 +60,20 @@
         <div class="m3u-filter-panel">
             <div class="m3u-search-wrap">
                 <i class="fa-solid fa-magnifying-glass"></i>
-                <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 실시간 검색...">
+                <input type="text" id="m3uSearchInput" class="m3u-input" placeholder="채널명 또는 프로그램 검색...">
             </div>
             <select id="m3uGroupSelect" class="m3u-select">
                 <option value="">전체 그룹 (All)</option>
             </select>
         </div>
 
-        <!-- 채널 개수 카운터 -->
+        <!-- 채널 개수 & EPG 상태 -->
         <div class="m3u-count-bar">
             <span>채널 목록 (<b id="m3uChannelCount">0</b>)</span>
+            <span id="m3uEpgStatus" class="m3u-epg-status">EPG 미적용</span>
         </div>
 
-        <!-- 스크롤 채널 리스트 -->
+        <!-- 채널 리스트 -->
         <div id="m3uChannelList" class="m3u-list-scroll">
             <div class="m3u-empty-state">M3U 목록을 불러와주세요.</div>
         </div>
