@@ -15,7 +15,7 @@
     position: relative;
 }
 
-/* ================= [좌측] 플레이어 영역 ================= */
+/* ================= [좌측] 비디오 플레이어 ================= */
 .m3u-player-section {
     display: flex !important;
     flex-direction: column !important;
@@ -48,6 +48,153 @@
     outline: none;
 }
 
+/* ================= 📺 TV 스타일 OSD 채널 안내창 ================= */
+.m3u-tv-osd {
+    position: absolute;
+    bottom: 25px;
+    left: 25px;
+    right: 25px;
+    background: rgba(15, 23, 42, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    padding: 0.85rem 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65);
+    z-index: 30;
+    pointer-events: none;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.m3u-tv-osd.hidden {
+    opacity: 0 !important;
+    transform: translateY(15px) !important;
+    pointer-events: none;
+}
+
+.m3u-osd-logo-box {
+    width: 60px;
+    height: 42px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.m3u-osd-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.m3u-osd-fallback-icon {
+    font-size: 1.5rem;
+    color: #94a3b8;
+}
+
+.m3u-osd-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.m3u-osd-top-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.m3u-osd-live-badge {
+    background: #ef4444;
+    color: #ffffff;
+    font-size: 0.68rem;
+    font-weight: 800;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+}
+
+.m3u-osd-channel-name {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #ffffff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.m3u-osd-group-name {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+}
+
+.m3u-osd-prog-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.95rem;
+}
+
+.m3u-osd-prog-title {
+    font-weight: 600;
+    color: #38bdf8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+.m3u-osd-prog-time {
+    font-size: 0.8rem;
+    color: #cbd5e1;
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+}
+
+.m3u-osd-progress-track {
+    width: 100%;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.m3u-osd-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1, #10b981);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.m3u-osd-bottom-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.m3u-osd-next {
+    color: #fbbf24;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 50%;
+}
+
+/* ================= 오버레이 및 하단 카드 ================= */
 .m3u-overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -60,16 +207,9 @@
     pointer-events: none;
     z-index: 10;
 }
-
 .m3u-overlay.hidden { display: none !important; }
+.m3u-overlay-icon { font-size: 3rem; color: var(--app-accent, #6366f1); margin-bottom: 0.8rem; }
 
-.m3u-overlay-icon {
-    font-size: 3rem;
-    color: var(--app-accent, #6366f1);
-    margin-bottom: 0.8rem;
-}
-
-/* ================= [좌측 하단] EPG 실시간 프로그레스 카드 ================= */
 .m3u-playing-card {
     margin-top: 0.75rem;
     padding: 0.75rem 0.9rem;
@@ -81,161 +221,27 @@
     gap: 0.5rem;
 }
 
-.m3u-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.m3u-title-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-}
-
-.m3u-badge {
-    background: #ef4444;
-    color: #ffffff;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    flex-shrink: 0;
-}
-
-.m3u-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--app-text-primary, #ffffff);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.m3u-group-badge {
-    font-size: 0.72rem;
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--app-text-muted, #94a3b8);
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-}
-
-.m3u-engine-badge {
-    font-size: 0.68rem;
-    background: rgba(99, 102, 241, 0.2);
-    color: var(--app-accent, #818cf8);
-    border: 1px solid var(--app-accent, #818cf8);
-    padding: 0.1rem 0.35rem;
-    border-radius: 4px;
-    font-weight: 700;
-}
-
-.m3u-action-group {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-}
-
-.m3u-icon-btn {
-    background: transparent;
-    border: none;
-    color: #fbbf24;
-    font-size: 1.1rem;
-    cursor: pointer;
-    padding: 0.2rem 0.4rem;
-    transition: transform 0.15s ease;
-}
-
+.m3u-card-header { display: flex; justify-content: space-between; align-items: center; }
+.m3u-title-group { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.m3u-badge { background: #ef4444; color: #ffffff; font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.45rem; border-radius: 4px; flex-shrink: 0; }
+.m3u-title { font-size: 1.05rem; font-weight: 600; color: var(--app-text-primary, #ffffff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m3u-group-badge { font-size: 0.72rem; background: rgba(255, 255, 255, 0.1); color: var(--app-text-muted, #94a3b8); padding: 0.1rem 0.4rem; border-radius: 4px; }
+.m3u-engine-badge { font-size: 0.68rem; background: rgba(99, 102, 241, 0.2); color: var(--app-accent, #818cf8); border: 1px solid var(--app-accent, #818cf8); padding: 0.1rem 0.35rem; border-radius: 4px; font-weight: 700; }
+.m3u-action-group { display: flex; align-items: center; gap: 0.4rem; }
+.m3u-icon-btn { background: transparent; border: none; color: #fbbf24; font-size: 1.1rem; cursor: pointer; padding: 0.2rem 0.4rem; transition: transform 0.15s ease; }
 .m3u-icon-btn:hover { transform: scale(1.15); }
 
-/* 프로그레스 바 디자인 */
-.m3u-epg-progress-container {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-}
-
-.m3u-epg-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-}
-
-.m3u-now-tag {
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #10b981;
-    background: rgba(16, 185, 129, 0.15);
-    padding: 0.1rem 0.35rem;
-    border-radius: 4px;
-    flex-shrink: 0;
-}
-
-.m3u-prog-title {
-    font-weight: 600;
-    color: var(--app-text-primary, #ffffff);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-}
-
-.m3u-prog-time {
-    font-size: 0.78rem;
-    color: var(--app-text-muted, #94a3b8);
-    flex-shrink: 0;
-}
-
-.m3u-progress-track {
-    width: 100%;
-    height: 6px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.m3u-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #6366f1, #10b981);
-    border-radius: 3px;
-    transition: width 0.4s ease;
-}
-
-.m3u-progress-meta {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.73rem;
-    color: var(--app-text-muted, #94a3b8);
-}
-
-/* NEXT 프로그램 */
-.m3u-next-program-row {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    font-size: 0.78rem;
-    color: var(--app-text-muted, #94a3b8);
-    padding-top: 0.35rem;
-    border-top: 1px dashed rgba(255, 255, 255, 0.08);
-}
-
-.m3u-next-tag {
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: #f59e0b;
-    background: rgba(245, 158, 11, 0.15);
-    padding: 0.05rem 0.3rem;
-    border-radius: 3px;
-    flex-shrink: 0;
-}
-
-.m3u-next-text {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
+.m3u-epg-progress-container { display: flex; flex-direction: column; gap: 0.3rem; }
+.m3u-epg-title-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.m3u-now-tag { font-size: 0.7rem; font-weight: 700; color: #10b981; background: rgba(16, 185, 129, 0.15); padding: 0.1rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
+.m3u-prog-title { font-weight: 600; color: var(--app-text-primary, #ffffff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.m3u-prog-time { font-size: 0.78rem; color: var(--app-text-muted, #94a3b8); flex-shrink: 0; }
+.m3u-progress-track { width: 100%; height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 3px; overflow: hidden; }
+.m3u-progress-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #10b981); border-radius: 3px; transition: width 0.4s ease; }
+.m3u-progress-meta { display: flex; justify-content: space-between; font-size: 0.73rem; color: var(--app-text-muted, #94a3b8); }
+.m3u-next-program-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.78rem; color: var(--app-text-muted, #94a3b8); padding-top: 0.35rem; border-top: 1px dashed rgba(255, 255, 255, 0.08); }
+.m3u-next-tag { font-size: 0.65rem; font-weight: 700; color: #f59e0b; background: rgba(245, 158, 11, 0.15); padding: 0.05rem 0.3rem; border-radius: 3px; flex-shrink: 0; }
+.m3u-next-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ================= [우측] 사이드바 ================= */
 .m3u-sidebar-section {
@@ -250,18 +256,8 @@
     overflow: hidden;
 }
 
-.m3u-toolbar {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    margin-bottom: 0.75rem;
-}
-
-.m3u-url-row, .m3u-btn-row {
-    display: flex;
-    gap: 0.4rem;
-}
-
+.m3u-toolbar { display: flex; flex-direction: column; gap: 0.45rem; margin-bottom: 0.75rem; }
+.m3u-url-row, .m3u-btn-row { display: flex; gap: 0.4rem; }
 .m3u-input, .m3u-select {
     width: 100%;
     background: var(--app-input-bg, #0f172a);
@@ -273,9 +269,7 @@
     outline: none;
     box-sizing: border-box;
 }
-
 .m3u-input:focus, .m3u-select:focus { border-color: var(--app-accent, #6366f1); }
-
 .m3u-btn {
     border: none;
     border-radius: 6px;
@@ -289,61 +283,24 @@
     justify-content: center;
     gap: 0.35rem;
 }
-
 .m3u-btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
 .m3u-btn-primary { background: var(--app-accent, #6366f1); color: #ffffff; }
 .m3u-btn-primary:hover { background: var(--app-accent-hover, #4f46e5); }
 .m3u-btn-secondary { background: #0ea5e9; color: #ffffff; }
 .m3u-btn-secondary:hover { background: #0284c7; }
-.m3u-btn-outline {
-    background: var(--app-bg-sidebar, #0f172a);
-    color: var(--app-text-primary, #ffffff);
-    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15));
-    flex: 1;
-}
+.m3u-btn-outline { background: var(--app-bg-sidebar, #0f172a); color: var(--app-text-primary, #ffffff); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15)); flex: 1; }
 .m3u-btn-outline:hover { background: var(--app-bg-card-hover, #334155); }
 .m3u-file-btn { cursor: pointer; }
 
-.m3u-filter-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    margin-bottom: 0.5rem;
-}
-
+.m3u-filter-panel { display: flex; flex-direction: column; gap: 0.45rem; margin-bottom: 0.5rem; }
 .m3u-search-wrap { position: relative; width: 100%; }
-.m3u-search-wrap i {
-    position: absolute;
-    left: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--app-text-muted, #94a3b8);
-    font-size: 0.8rem;
-}
+.m3u-search-wrap i { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--app-text-muted, #94a3b8); font-size: 0.8rem; }
 .m3u-search-wrap input { padding-left: 2rem !important; }
 
-.m3u-count-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.8rem;
-    color: var(--app-text-muted, #94a3b8);
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.08));
-    margin-bottom: 0.4rem;
-}
+.m3u-count-bar { display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--app-text-muted, #94a3b8); padding: 0.3rem 0; border-bottom: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.08)); margin-bottom: 0.4rem; }
 .m3u-epg-status { font-size: 0.73rem; color: #10b981; }
 
-/* 채널 리스트 */
-.m3u-list-scroll {
-    flex: 1;
-    overflow-y: auto !important;
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    padding-right: 0.25rem;
-}
-
+.m3u-list-scroll { flex: 1; overflow-y: auto !important; display: flex; flex-direction: column; gap: 0.35rem; padding-right: 0.25rem; }
 .m3u-channel-item {
     display: flex !important;
     align-items: center !important;
@@ -354,197 +311,40 @@
     border: 1px solid var(--app-border, rgba(255, 255, 255, 0.08));
     cursor: pointer;
     transition: all 0.15s ease;
-    box-sizing: border-box;
-    position: relative;
 }
+.m3u-channel-item:hover { background: var(--app-bg-card-hover, #334155); border-color: var(--app-accent, #6366f1); }
+.m3u-channel-item.active { background: var(--app-accent, #6366f1) !important; border-color: var(--app-accent, #6366f1) !important; }
+.m3u-channel-item.active .m3u-ch-name, .m3u-channel-item.active .m3u-ch-epg, .m3u-channel-item.active .m3u-fallback-icon, .m3u-channel-item.active .m3u-ch-time { color: #ffffff !important; }
 
-.m3u-channel-item:hover {
-    background: var(--app-bg-card-hover, #334155);
-    border-color: var(--app-accent, #6366f1);
-}
-
-.m3u-channel-item.active {
-    background: var(--app-accent, #6366f1) !important;
-    border-color: var(--app-accent, #6366f1) !important;
-}
-
-.m3u-channel-item.active .m3u-ch-name,
-.m3u-channel-item.active .m3u-ch-epg,
-.m3u-channel-item.active .m3u-fallback-icon,
-.m3u-channel-item.active .m3u-ch-time {
-    color: #ffffff !important;
-}
-
-.m3u-logo-box {
-    width: 44px !important;
-    height: 30px !important;
-    min-width: 44px !important;
-    min-height: 30px !important;
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden !important;
-    flex-shrink: 0 !important;
-}
-
-.m3u-ch-logo {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 44px !important;
-    max-height: 30px !important;
-    object-fit: contain !important;
-}
-
+.m3u-logo-box { width: 44px !important; height: 30px !important; min-width: 44px !important; min-height: 30px !important; background: rgba(0, 0, 0, 0.25); border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden !important; flex-shrink: 0 !important; }
+.m3u-ch-logo { width: 100% !important; height: 100% !important; max-width: 44px !important; max-height: 30px !important; object-fit: contain !important; }
 .m3u-fallback-icon { font-size: 0.95rem; color: var(--app-text-muted, #94a3b8); }
-
-.m3u-ch-info {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-
-.m3u-ch-name {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--app-text-primary, #ffffff);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.m3u-ch-epg-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.72rem;
-    color: var(--app-text-muted, #94a3b8);
-}
-
-.m3u-ch-epg {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 170px;
-}
-
+.m3u-ch-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.m3u-ch-name { font-size: 0.85rem; font-weight: 600; color: var(--app-text-primary, #ffffff); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m3u-ch-epg-row { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--app-text-muted, #94a3b8); }
+.m3u-ch-epg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
 .m3u-ch-time { font-size: 0.68rem; opacity: 0.85; }
-
-/* 채널 카드 미니 프로그레스 바 */
-.m3u-ch-mini-bar {
-    width: 100%;
-    height: 3px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 2px;
-    margin-top: 2px;
-    overflow: hidden;
-}
-
-.m3u-ch-mini-fill {
-    height: 100%;
-    background: #10b981;
-}
-
-.m3u-channel-item.active .m3u-ch-mini-fill {
-    background: #ffffff;
-}
-
-.m3u-fav-star {
-    font-size: 0.9rem;
-    color: var(--app-text-muted, #64748b);
-    padding: 0.2rem;
-    cursor: pointer;
-}
+.m3u-ch-mini-bar { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.08); border-radius: 2px; margin-top: 2px; overflow: hidden; }
+.m3u-ch-mini-fill { height: 100%; background: #10b981; }
+.m3u-channel-item.active .m3u-ch-mini-fill { background: #ffffff; }
+.m3u-fav-star { font-size: 0.9rem; color: var(--app-text-muted, #64748b); padding: 0.2rem; cursor: pointer; }
 .m3u-fav-star.active { color: #fbbf24; }
+.m3u-empty-state { text-align: center; color: var(--app-text-muted, #94a3b8); padding: 3rem 1rem; font-size: 0.85rem; }
 
-.m3u-empty-state {
-    text-align: center;
-    color: var(--app-text-muted, #94a3b8);
-    padding: 3rem 1rem;
-    font-size: 0.85rem;
-}
-
-/* ================= 편성표 모달 ================= */
-.m3u-modal {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.75);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1.5rem;
-}
-
+/* 모달 */
+.m3u-modal { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.75); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
 .m3u-modal.hidden { display: none !important; }
-
-.m3u-modal-content {
-    background: var(--app-bg-card, #1e293b);
-    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15));
-    border-radius: 12px;
-    width: 520px;
-    max-width: 95%;
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-}
-
-.m3u-modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.1));
-}
-
+.m3u-modal-content { background: var(--app-bg-card, #1e293b); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15)); border-radius: 12px; width: 520px; max-width: 95%; max-height: 80vh; display: flex; flex-direction: column; }
+.m3u-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid var(--app-border-light, rgba(255, 255, 255, 0.1)); }
 .m3u-modal-header h3 { margin: 0; font-size: 1.05rem; }
-
-.m3u-close-btn {
-    background: transparent;
-    border: none;
-    font-size: 1.5rem;
-    color: var(--app-text-muted);
-    cursor: pointer;
-}
-
-.m3u-modal-body {
-    padding: 1rem;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.m3u-schedule-item {
-    display: flex;
-    gap: 0.8rem;
-    padding: 0.6rem 0.8rem;
-    border-radius: 6px;
-    background: var(--app-bg-main, #0f172a);
-    font-size: 0.85rem;
-}
-
-.m3u-schedule-item.current {
-    border-left: 3px solid #10b981;
-    background: rgba(16, 185, 129, 0.12);
-}
-
-.m3u-sched-time {
-    font-weight: 600;
-    color: var(--app-accent, #818cf8);
-    flex-shrink: 0;
-    width: 90px;
-}
-
+.m3u-close-btn { background: transparent; border: none; font-size: 1.5rem; color: var(--app-text-muted); cursor: pointer; }
+.m3u-modal-body { padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+.m3u-schedule-item { display: flex; gap: 0.8rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--app-bg-main, #0f172a); font-size: 0.85rem; }
+.m3u-schedule-item.current { border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.12); }
+.m3u-sched-time { font-weight: 600; color: var(--app-accent, #818cf8); flex-shrink: 0; width: 90px; }
 .m3u-sched-title { flex: 1; color: var(--app-text-primary); }
 
 @media (max-width: 900px) {
-    .m3u-root {
-        grid-template-columns: 1fr !important;
-        grid-template-rows: 280px 1fr !important;
-        height: calc(100vh - 60px) !important;
-    }
+    .m3u-root { grid-template-columns: 1fr !important; grid-template-rows: 280px 1fr !important; height: calc(100vh - 60px) !important; }
+    .m3u-tv-osd { bottom: 10px; left: 10px; right: 10px; padding: 0.5rem 0.75rem; }
 }
