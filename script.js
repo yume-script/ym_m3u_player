@@ -263,29 +263,27 @@
         }
     }
 
-    // 🌐 [핵심] CORS 차단 자동 우회 fetch 함수
+    // 📄 텍스트 파일(M3U/EPG) 조회: 직접 fetch를 우선 시도하고, 실패하면
+    // 코어가 제공하는 window.BookOasisPlugin.getProxyUrl()로 재시도한다.
+    // (공개 CORS 우회 프록시를 쓰지 않는다 — 등록한 URL이 외부 제3자 서버로 전달되지 않도록
+    // 코어 자체 프록시(/api/webview/proxy)만 사용한다.)
+    // getProxyUrl은 화이트리스트 검증에 실패하면 자체적으로 토스트 안내를 띄우고 null을 반환하므로,
+    // 여기서는 별도 알림 없이 실패로 처리한다.
     async function fetchTextWithCorsFallback(url) {
-        // 1차: 직접 fetch 시도
         try {
             const res = await fetch(url);
             if (res.ok) return await res.text();
         } catch (e) {
-            console.warn(`[M3UPlayer] Direct fetch failed for ${url} (CORS/Mixed Content), trying fallback proxy...`);
+            console.warn(`[M3UPlayer] Direct fetch failed for ${url}, trying core proxy (getProxyUrl)...`);
         }
 
-        // 2차: allorigins 프록시 시도
-        try {
-            const proxyUrl1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-            const res1 = await fetch(proxyUrl1);
-            if (res1.ok) return await res1.text();
-        } catch (e) {}
-
-        // 3차: corsproxy.io 시도
-        try {
-            const proxyUrl2 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-            const res2 = await fetch(proxyUrl2);
-            if (res2.ok) return await res2.text();
-        } catch (e) {}
+        if (window.BookOasisPlugin && typeof window.BookOasisPlugin.getProxyUrl === 'function') {
+            const proxyUrl = await window.BookOasisPlugin.getProxyUrl(url);
+            if (proxyUrl) {
+                const res = await fetch(proxyUrl);
+                if (res.ok) return await res.text();
+            }
+        }
 
         throw new Error('CORS 차단 또는 서버 응답 없음');
     }
@@ -506,7 +504,34 @@
         return { current, next, progress, timeText, remainText };
     }
 
-    // 사전 스트림 헬스체크
+    // 🩺 사전 스트림 헬스체크: 직접 Range 조회를 우선 시도하고, CORS 등으로 실패하면
+    // window.BookOasisPlugin.getStreamProxyUrl()을 통해 한 번 더 확인한다.
+    // (직접 fetch만으로는 실제로는 재생 가능한 채널도 CORS 미허용 때문에 오프라인으로
+    // 오탐될 수 있어서, 실제 재생 경로와 동일한 프록시 경유 확인을 추가한다.)
+    async function checkChannelHealth(ch) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2500);
+            const res = await fetch(ch.url, { method: 'GET', signal: controller.signal, headers: { 'Range': 'bytes=0-50' } });
+            clearTimeout(timeoutId);
+            if (res.ok || res.status === 206) return 'online';
+        } catch (e) {}
+
+        if (window.BookOasisPlugin && typeof window.BookOasisPlugin.getStreamProxyUrl === 'function') {
+            try {
+                const proxyUrl = await window.BookOasisPlugin.getStreamProxyUrl(ch.url);
+                if (!proxyUrl) return 'offline';
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2500);
+                const res = await fetch(proxyUrl, { method: 'GET', signal: controller.signal, headers: { 'Range': 'bytes=0-50' } });
+                clearTimeout(timeoutId);
+                if (res.ok || res.status === 206) return 'online';
+            } catch (e) {}
+        }
+
+        return 'offline';
+    }
+
     async function startHealthCheckBatch() {
         if (isHealthChecking || allChannels.length === 0) return;
         isHealthChecking = true;
@@ -522,20 +547,7 @@
                 channelHealth[key] = 'checking';
                 renderFilteredChannels();
 
-                try {
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 2500);
-                    const res = await fetch(ch.url, { method: 'GET', signal: controller.signal, headers: { 'Range': 'bytes=0-50' } });
-                    clearTimeout(timeoutId);
-
-                    if (res.ok || res.status === 206) {
-                        channelHealth[key] = 'online';
-                    } else {
-                        channelHealth[key] = 'offline';
-                    }
-                } catch (e) {
-                    channelHealth[key] = 'offline';
-                }
+                channelHealth[key] = await checkChannelHealth(ch);
             }
         }
 
@@ -749,29 +761,44 @@
         videoEl.muted = !!isAutoplay;
 
         const streamUrl = channel.url.trim();
-        const lowerUrl = streamUrl.toLowerCase();
+        attemptPlayUrl(channel, streamUrl, false);
+        renderFilteredChannels();
+    }
+
+    // url: 실제로 재생을 시도할 URL (원본 또는 프록시로 치환된 URL)
+    // isViaProxy: getStreamProxyUrl로 이미 한 번 치환된 URL인지 여부.
+    // 실패 시 isViaProxy가 false면 프록시로 한 번 더 재시도하고, true(프록시로도 실패)면 최종 오프라인 처리한다.
+    function attemptPlayUrl(channel, url, isViaProxy) {
+        const lowerUrl = url.toLowerCase();
         const isTs = lowerUrl.endsWith('.ts') || lowerUrl.includes('output=ts');
 
+        const onFailure = () => {
+            if (activeChannel !== channel) return; // 그 사이 채널이 바뀌었으면 무시
+            if (isViaProxy) {
+                setChannelStatus(channel, 'offline');
+                setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
+            } else {
+                retryViaStreamProxy(channel, url);
+            }
+        };
+
         if (isTs && window.mpegts && window.mpegts.isSupported()) {
-            engineBadgeEl.textContent = 'MPEG-TS';
+            engineBadgeEl.textContent = isViaProxy ? 'MPEG-TS (프록시)' : 'MPEG-TS';
             try {
-                mpegtsPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url: streamUrl });
+                mpegtsPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url });
                 mpegtsPlayer.attachMediaElement(videoEl);
                 mpegtsPlayer.load();
                 mpegtsPlayer.play().then(() => {
                     setOverlay('', false);
                     setChannelStatus(channel, 'online');
-                }).catch(() => {
-                    setChannelStatus(channel, 'offline');
-                });
+                }).catch(onFailure);
             } catch (e) {
-                setChannelStatus(channel, 'offline');
-                fallbackPlay(streamUrl, channel);
+                onFailure();
             }
         } else if (window.Hls && window.Hls.isSupported()) {
-            engineBadgeEl.textContent = 'HLS';
+            engineBadgeEl.textContent = isViaProxy ? 'HLS (프록시)' : 'HLS';
             hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: true });
-            hlsInstance.loadSource(streamUrl);
+            hlsInstance.loadSource(url);
             hlsInstance.attachMedia(videoEl);
 
             hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
@@ -782,27 +809,44 @@
 
             hlsInstance.on(window.Hls.Events.ERROR, (event, data) => {
                 if (data.fatal) {
-                    setChannelStatus(channel, 'offline');
-                    setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
+                    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+                    onFailure();
                 }
             });
         } else {
-            fallbackPlay(streamUrl, channel);
+            engineBadgeEl.textContent = isViaProxy ? 'DIRECT (프록시)' : 'DIRECT';
+            videoEl.src = url;
+            videoEl.play().then(() => {
+                setOverlay('', false);
+                setChannelStatus(channel, 'online');
+            }).catch(onFailure);
         }
-
-        renderFilteredChannels();
     }
 
-    function fallbackPlay(url, channel) {
-        engineBadgeEl.textContent = 'DIRECT';
-        videoEl.src = url;
-        videoEl.play().then(() => {
-            setOverlay('', false);
-            setChannelStatus(channel, 'online');
-        }).catch(() => {
+    // 직접 재생이 실패했을 때(CORS/mixed-content 등) 코어의 스트림 프록시로 한 번 더 시도한다.
+    // getStreamProxyUrl은 .m3u8은 내부 세그먼트까지 프록시로 재작성해 돌려주고,
+    // 그 외 스트림은 버퍼링 없는 pass-through로 중계한다. 화이트리스트 실패 시 자체 토스트를
+    // 띄우고 null을 반환하므로 여기서는 별도 알림 없이 오프라인 처리한다.
+    async function retryViaStreamProxy(channel, originalUrl) {
+        if (!window.BookOasisPlugin || typeof window.BookOasisPlugin.getStreamProxyUrl !== 'function') {
             setChannelStatus(channel, 'offline');
-            setOverlay('재생할 수 없는 스트림입니다.', true);
-        });
+            setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
+            return;
+        }
+
+        let proxyUrl = null;
+        try {
+            proxyUrl = await window.BookOasisPlugin.getStreamProxyUrl(originalUrl);
+        } catch (e) {}
+
+        if (activeChannel !== channel) return; // 대기 중 채널이 바뀌었으면 재생하지 않는다
+
+        if (!proxyUrl) {
+            setChannelStatus(channel, 'offline');
+            return;
+        }
+
+        attemptPlayUrl(channel, proxyUrl, true);
     }
 
     function openScheduleView() {

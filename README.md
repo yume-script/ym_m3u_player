@@ -84,9 +84,6 @@ plugins/metadata/m3u_player/
 | 삼성 TV 플러스 (FAST) | `https://raw.githubusercontent.com/iptv-org/iptv/master/streams/kr_samsung.m3u` | - | 무료 FAST 채널 모음 |
 | 글로벌 뉴스 | `https://iptv-org.github.io/iptv/categories/news.m3u` | - | 전 세계 실시간 뉴스 채널 |
 
-> ⚠️ **개인 소스에 API 키가 포함된 경우 주의하세요.** 아래 "보안 및 런타임 제약" 항목의 CORS 우회 동작을
-> 반드시 함께 읽어보시길 권장합니다.
-
 ## ⌨️ 조작 가이드 및 단축키
 
 | 키 / 동작 | 기능 |
@@ -100,10 +97,12 @@ plugins/metadata/m3u_player/
 
 ## 🔒 보안 및 런타임 제약
 
-- **CORS 우회 폴백**: M3U/EPG를 직접 가져오지 못하면(CORS 차단 등) `api.allorigins.win`,
-  `corsproxy.io` 같은 **공개 프록시를 통해 재시도**합니다. 이 과정에서 등록한 URL(쿼리에 담긴 API 키
-  포함)이 해당 프록시 서버로 그대로 전달됩니다. 인증 토큰이 포함된 개인 소스를 등록할 때는 이 점을
-  감안해 주세요.
+- **CORS 우회는 코어 내장 프록시로만 처리**: M3U/EPG 텍스트 파일을 직접 가져오지 못하면(CORS 차단 등)
+  북오아시스 코어가 제공하는 `window.BookOasisPlugin.getProxyUrl()`(`/api/webview/proxy` 경유)로,
+  실제 스트림 재생이 직접 연결로 실패하면 `window.BookOasisPlugin.getStreamProxyUrl()`
+  (`/api/webview/hls-proxy` 경유, `.m3u8`은 내부 세그먼트 URL까지 재작성)로 재시도합니다.
+  등록한 URL(API 키 포함 가능)은 항상 북오아시스 서버 자신을 거쳐 갈 뿐, 외부 제3자 프록시 서버로
+  전달되지 않습니다. 두 함수 모두 화이트리스트 검증에 실패하면 자체적으로 토스트 안내를 띄웁니다.
 - **Fail-Safe 재생 처리**: 연결이 끊어진 스트림은 오류 감지 후 안전하게 오프라인으로 격리 처리합니다.
 - **자동재생 음소거**: 페이지 진입 직후의 첫 채널 자동재생은 브라우저 자동재생 정책과의 충돌을
   피하기 위해 음소거 상태로 시작합니다. 필요 시 플레이어 컨트롤로 음소거를 해제하세요.
