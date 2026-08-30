@@ -20,6 +20,13 @@
     let timerInterval = null;
     let osdTimeout = null;
 
+    // 재생을 시도할 때마다 1씩 증가하는 토큰. HLS 에러/프록시 재시도 같은 비동기 콜백이
+    // 나중에 뒤늦게 도착했을 때, 그 사이 채널이 바뀌어 이미 낡은 시도가 됐는지 판별하는 데 쓴다.
+    // (activeChannel 객체 비교만으로는 전역 hlsInstance/mpegtsPlayer를 공유하는 콜백들의
+    // 경합을 완전히 막지 못해, 실패한 이전 채널의 뒤늦은 콜백이 방금 재생을 시작한
+    // 새 채널의 인스턴스를 잘못 건드리는 버그가 있었다.)
+    let playToken = 0;
+
     // 기본 5개 세트 정의 (서버/로컬 모두 조회 실패할 때의 최종 폴백)
     let sourceSlots = [
         { enabled: true, name: '개인', m3u: '', epg: '' },
@@ -767,6 +774,8 @@
     // 이 경우에는 음소거 상태로 재생을 시작한다. 사용자는 플레이어 컨트롤로 언제든 음소거를 해제할 수 있다.
     function playStream(channel, isAutoplay) {
         activeChannel = channel;
+        const myToken = ++playToken; // 이번 재생 시도의 고유 토큰
+
         currentTitleEl.textContent = channel.name;
         currentGroupEl.textContent = channel.group || 'Live';
         updateFavIcon();
@@ -776,68 +785,84 @@
         if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
         if (mpegtsPlayer) { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); mpegtsPlayer = null; }
 
+        // 이전 채널이 DIRECT(video.src) 방식으로 재생/실패했던 잔여 상태가 남아있으면
+        // 다음 채널의 hls.js/mpegts.js attachMedia가 방해받을 수 있어 완전히 초기화한다.
+        videoEl.removeAttribute('src');
+        videoEl.load();
+
         videoEl.muted = !!isAutoplay;
 
         const streamUrl = channel.url.trim();
-        attemptPlayUrl(channel, streamUrl, false);
+        attemptPlayUrl(channel, streamUrl, false, myToken);
         renderFilteredChannels();
     }
 
     // url: 실제로 재생을 시도할 URL (원본 또는 프록시로 치환된 URL)
     // isViaProxy: getStreamProxyUrl로 이미 한 번 치환된 URL인지 여부.
-    // 실패 시 isViaProxy가 false면 프록시로 한 번 더 재시도하고, true(프록시로도 실패)면 최종 오프라인 처리한다.
-    function attemptPlayUrl(channel, url, isViaProxy) {
+    // token: 이 시도가 시작될 때의 playToken 스냅샷. 실행 중 playToken이 바뀌었다면(다른 채널로 전환됨)
+    //        이 시도에서 파생된 모든 비동기 콜백은 아무 것도 하지 않고 조용히 무시한다.
+    function attemptPlayUrl(channel, url, isViaProxy, token) {
+        if (token !== playToken) return; // 이미 낡은 시도라 시작조차 하지 않는다
+        const isStale = () => token !== playToken;
+
         const lowerUrl = url.toLowerCase();
         const isTs = lowerUrl.endsWith('.ts') || lowerUrl.includes('output=ts');
 
         const onFailure = () => {
-            if (activeChannel !== channel) return; // 그 사이 채널이 바뀌었으면 무시
+            if (isStale()) return;
             if (isViaProxy) {
                 setChannelStatus(channel, 'offline');
                 setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
             } else {
-                retryViaStreamProxy(channel, url);
+                retryViaStreamProxy(channel, url, token);
             }
         };
 
         if (isTs && window.mpegts && window.mpegts.isSupported()) {
             engineBadgeEl.textContent = isViaProxy ? 'MPEG-TS (프록시)' : 'MPEG-TS';
             try {
-                mpegtsPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url });
-                mpegtsPlayer.attachMediaElement(videoEl);
-                mpegtsPlayer.load();
-                mpegtsPlayer.play().then(() => {
+                const thisPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url });
+                mpegtsPlayer = thisPlayer;
+                thisPlayer.attachMediaElement(videoEl);
+                thisPlayer.load();
+                thisPlayer.play().then(() => {
+                    if (isStale()) return;
                     setOverlay('', false);
                     setChannelStatus(channel, 'online');
-                }).catch(onFailure);
+                }).catch(() => { if (!isStale()) onFailure(); });
             } catch (e) {
-                onFailure();
+                if (!isStale()) onFailure();
             }
         } else if (window.Hls && window.Hls.isSupported()) {
             engineBadgeEl.textContent = isViaProxy ? 'HLS (프록시)' : 'HLS';
-            hlsInstance = new window.Hls({ enableWorker: true, lowLatencyMode: true });
-            hlsInstance.loadSource(url);
-            hlsInstance.attachMedia(videoEl);
+            const thisHls = new window.Hls({ enableWorker: true, lowLatencyMode: true });
+            hlsInstance = thisHls;
+            thisHls.loadSource(url);
+            thisHls.attachMedia(videoEl);
 
-            hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
+            thisHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+                if (isStale()) return;
                 setOverlay('', false);
                 setChannelStatus(channel, 'online');
                 videoEl.play().catch(() => {});
             });
 
-            hlsInstance.on(window.Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-                    onFailure();
-                }
+            thisHls.on(window.Hls.Events.ERROR, (event, data) => {
+                if (!data.fatal) return;
+                // 이 인스턴스(thisHls) 자신만 정리한다. 전역 hlsInstance가 이미 다른(새) 인스턴스로
+                // 교체된 뒤라면(=낡은 시도) 그 새 인스턴스를 건드리지 않도록 반드시 참조가 같을 때만 null로 되돌린다.
+                thisHls.destroy();
+                if (hlsInstance === thisHls) hlsInstance = null;
+                if (!isStale()) onFailure();
             });
         } else {
             engineBadgeEl.textContent = isViaProxy ? 'DIRECT (프록시)' : 'DIRECT';
             videoEl.src = url;
             videoEl.play().then(() => {
+                if (isStale()) return;
                 setOverlay('', false);
                 setChannelStatus(channel, 'online');
-            }).catch(onFailure);
+            }).catch(() => { if (!isStale()) onFailure(); });
         }
     }
 
@@ -850,7 +875,9 @@
     // 근본 해결책이다(README 참고).
     // 화이트리스트 실패 시 getStreamProxyUrl 자체가 토스트 안내를 띄우고 null을 반환하므로
     // 여기서는 별도 알림 없이 오프라인 처리한다.
-    async function retryViaStreamProxy(channel, originalUrl) {
+    async function retryViaStreamProxy(channel, originalUrl, token) {
+        if (token !== playToken) return; // 대기 중 다른 채널로 전환됐으면 아무 것도 하지 않는다
+
         if (!window.BookOasisPlugin || typeof window.BookOasisPlugin.getStreamProxyUrl !== 'function') {
             setChannelStatus(channel, 'offline');
             setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
@@ -862,14 +889,14 @@
             proxyUrl = await window.BookOasisPlugin.getStreamProxyUrl(originalUrl);
         } catch (e) {}
 
-        if (activeChannel !== channel) return; // 대기 중 채널이 바뀌었으면 재생하지 않는다
+        if (token !== playToken) return; // await 도중 채널이 바뀌었으면 재생하지 않는다
 
         if (!proxyUrl) {
             setChannelStatus(channel, 'offline');
             return;
         }
 
-        attemptPlayUrl(channel, proxyUrl, true);
+        attemptPlayUrl(channel, proxyUrl, true, token);
     }
 
     function openScheduleView() {
