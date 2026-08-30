@@ -1,9 +1,11 @@
 // plugins/metadata/m3u_player/script.js
 (function () {
+    let isInitialized = false;
     let hlsInstance = null;
+    let mpegtsPlayer = null;
     let allChannels = [];
     let activeChannel = null;
-    let epgProgrammes = {}; // { [channelId]: [ { start, stop, title } ] }
+    let epgProgrammes = {};
 
     const videoEl = document.getElementById('m3uVideoPlayer');
     const overlayEl = document.getElementById('m3uPlayerOverlay');
@@ -23,16 +25,14 @@
     const currentTitleEl = document.getElementById('m3uCurrentChannelTitle');
     const currentGroupEl = document.getElementById('m3uCurrentChannelGroup');
     const currentEpgTextEl = document.getElementById('m3uCurrentEpgText');
+    const engineBadgeEl = document.getElementById('m3uStreamEngineBadge');
 
+    // 1. 초기화 및 기본값(서버 설정 + 브라우저 로컬 스토리지) 로드
     async function init() {
-        // 1. 저장된 M3U & EPG URL 불러오기 (서버 설정 또는 로컬스토리지)
-        const defaultM3u = localStorage.getItem('m3u_default_url') || '';
-        const defaultEpg = localStorage.getItem('m3u_default_epg_url') || '';
+        if (isInitialized) return;
+        isInitialized = true;
 
-        if (defaultM3u) urlInput.value = defaultM3u;
-        if (defaultEpg) epgInput.value = defaultEpg;
-
-        // 2. 이벤트 바인딩
+        // UI 이벤트 바인딩
         loadBtn.addEventListener('click', () => {
             const url = urlInput.value.trim();
             if (url) loadM3UFromUrl(url);
@@ -48,7 +48,7 @@
             const epgUrl = epgInput.value.trim();
             localStorage.setItem('m3u_default_url', m3uUrl);
             localStorage.setItem('m3u_default_epg_url', epgUrl);
-            alert('기본 M3U 및 EPG 주소가 저장되었습니다.\n다음 접속 시 자동으로 로드됩니다.');
+            alert('기본 M3U 및 EPG 주소가 저장되었습니다.');
         });
 
         urlInput.addEventListener('keydown', (e) => {
@@ -59,16 +59,162 @@
         searchInput.addEventListener('input', renderFilteredChannels);
         groupSelectEl.addEventListener('change', renderFilteredChannels);
 
-        // 3. 기본 URL이 있으면 자동 로드 실행
-        if (defaultEpg) {
-            loadEPGFromUrl(defaultEpg);
+        // 기본값 복구: 1순위(브라우저 저장값) -> 2순위(서버 config_schema 설정값)
+        let defaultM3u = localStorage.getItem('m3u_default_url') || '';
+        let defaultEpg = localStorage.getItem('m3u_default_epg_url') || '';
+
+        if (!defaultM3u || !defaultEpg) {
+            try {
+                // 북오아시스 플러그인 서버 설정 동기화 시도
+                const res = await fetch('/api/media/plugins');
+                if (res.ok) {
+                    const data = await res.json();
+                    const plugins = data.plugins || [];
+                    const myPlugin = plugins.find(p => p.id === 'm3u_player');
+                    if (myPlugin && myPlugin.config) {
+                        if (!defaultM3u && myPlugin.config.DEFAULT_M3U_URL) {
+                            defaultM3u = myPlugin.config.DEFAULT_M3U_URL;
+                        }
+                        if (!defaultEpg && myPlugin.config.DEFAULT_EPG_URL) {
+                            defaultEpg = myPlugin.config.DEFAULT_EPG_URL;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('[M3UPlayer] Server config fetch ignored:', e);
+            }
         }
-        if (defaultM3u) {
-            loadM3UFromUrl(defaultM3u);
+
+        if (defaultM3u) urlInput.value = defaultM3u;
+        if (defaultEpg) epgInput.value = defaultEpg;
+
+        // EPG 및 M3U 자동 로드
+        if (defaultEpg) loadEPGFromUrl(defaultEpg);
+        if (defaultM3u) loadM3UFromUrl(defaultM3u);
+    }
+
+    // 2. 스트림 엔진 해제 헬퍼
+    function destroyCurrentPlayers() {
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
+        }
+        if (mpegtsPlayer) {
+            mpegtsPlayer.pause();
+            mpegtsPlayer.unload();
+            mpegtsPlayer.detachMediaElement();
+            mpegtsPlayer.destroy();
+            mpegtsPlayer = null;
         }
     }
 
-    // M3U 파서 (EXTINF에서 tvg-id, tvg-name, tvg-logo 추출)
+    // 3. 하이브리드 미디어 재생 (HLS.js / MPEGTS.js / Safari Native)
+    function playStream(channel) {
+        activeChannel = channel;
+        currentTitleEl.textContent = channel.name;
+        currentGroupEl.textContent = channel.group || 'Live';
+        updateCurrentChannelEPG();
+
+        destroyCurrentPlayers();
+
+        const streamUrl = channel.url.trim();
+        const lowerUrl = streamUrl.toLowerCase();
+
+        // 스트림 형식 판별: TS 직접 스트림 / FLV 여부 확인
+        const isTsOrFlv = lowerUrl.endsWith('.ts') || lowerUrl.endsWith('.flv') || lowerUrl.includes('output=ts') || lowerUrl.includes('type=ts');
+
+        if (isTsOrFlv && window.mpegts && window.mpegts.isSupported()) {
+            // [Engine 1] mpegts.js (MPEG-TS direct stream)
+            engineBadgeEl.textContent = 'MPEG-TS';
+            engineBadgeEl.style.display = 'inline-block';
+
+            try {
+                mpegtsPlayer = window.mpegts.createPlayer({
+                    type: lowerUrl.endsWith('.flv') ? 'flv' : 'mse',
+                    isLive: true,
+                    url: streamUrl
+                }, {
+                    enableWorker: true,
+                    lazyLoad: false,
+                    liveBufferLatencyChasing: true
+                });
+
+                mpegtsPlayer.attachMediaElement(videoEl);
+                mpegtsPlayer.load();
+                mpegtsPlayer.play().then(() => {
+                    setOverlay('', false);
+                }).catch(e => console.log('[M3UPlayer] TS Autoplay:', e));
+
+                mpegtsPlayer.on(window.mpegts.Events.ERROR, (errorType, errorDetail) => {
+                    console.error('[M3UPlayer] MPEGTS Error:', errorType, errorDetail);
+                    setOverlay('TS 스트림 연결 실패 (CORS 또는 스트림 오프라인)', true);
+                });
+            } catch (err) {
+                console.error('[M3UPlayer] MPEGTS init error:', err);
+                fallbackDirectPlay(streamUrl);
+            }
+        } else if (window.Hls && window.Hls.isSupported()) {
+            // [Engine 2] HLS.js (m3u8 stream)
+            engineBadgeEl.textContent = 'HLS';
+            engineBadgeEl.style.display = 'inline-block';
+
+            hlsInstance = new window.Hls({
+                enableWorker: true,
+                lowLatencyMode: true,
+                backBufferLength: 30
+            });
+
+            hlsInstance.loadSource(streamUrl);
+            hlsInstance.attachMedia(videoEl);
+
+            hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
+                setOverlay('', false);
+                videoEl.play().catch(e => console.log('[M3UPlayer] HLS Autoplay:', e));
+            });
+
+            hlsInstance.on(window.Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    switch (data.type) {
+                        case window.Hls.ErrorTypes.NETWORK_ERROR:
+                            setOverlay('스트림 연결 실패 (CORS 또는 스트림 오프라인)', true);
+                            hlsInstance.startLoad();
+                            break;
+                        case window.Hls.ErrorTypes.MEDIA_ERROR:
+                            hlsInstance.recoverMediaError();
+                            break;
+                        default:
+                            hlsInstance.destroy();
+                            setOverlay('재생할 수 없는 스트림입니다.', true);
+                            break;
+                    }
+                }
+            });
+        } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            // [Engine 3] Safari / iOS Native
+            engineBadgeEl.textContent = 'NATIVE';
+            engineBadgeEl.style.display = 'inline-block';
+
+            videoEl.src = streamUrl;
+            videoEl.addEventListener('loadedmetadata', () => {
+                setOverlay('', false);
+                videoEl.play().catch(e => console.log('[M3UPlayer] Native Play:', e));
+            });
+        } else {
+            fallbackDirectPlay(streamUrl);
+        }
+
+        renderFilteredChannels();
+    }
+
+    function fallbackDirectPlay(url) {
+        engineBadgeEl.textContent = 'DIRECT';
+        videoEl.src = url;
+        videoEl.play().then(() => setOverlay('', false)).catch(() => {
+            setOverlay('지원되지 않는 미디어 형식이거나 재생할 수 없습니다.', true);
+        });
+    }
+
+    // 4. M3U 파서
     function parseM3U(content) {
         const lines = content.split(/\r?\n/);
         const channels = [];
@@ -111,7 +257,7 @@
         return channels;
     }
 
-    // EPG (XMLTV) 파서
+    // 5. EPG (XMLTV) 파서
     async function loadEPGFromUrl(url) {
         epgStatusEl.textContent = 'EPG 로딩 중...';
         epgStatusEl.style.color = 'var(--app-text-muted)';
@@ -157,7 +303,6 @@
     }
 
     function parseXMLTVDate(str) {
-        // YYYYMMDDHHMMSS 형식 파싱
         const clean = str.replace(/[^0-9]/g, '');
         if (clean.length < 14) return new Date();
         const y = clean.substr(0, 4);
@@ -166,7 +311,7 @@
         const h = clean.substr(8, 2);
         const min = clean.substr(10, 2);
         const s = clean.substr(12, 2);
-        return new Date(Date.UTC(y, m, d, h - 9, min, s)); // KST 기준 보정
+        return new Date(Date.UTC(y, m, d, h - 9, min, s));
     }
 
     function getCurrentProgram(channel) {
@@ -178,6 +323,7 @@
         return list.find(p => p.start <= now && (!p.stop || p.stop >= now)) || list[0];
     }
 
+    // 6. M3U 로드 및 데이터 처리
     async function loadM3UFromUrl(url) {
         setOverlay('M3U 목록을 불러오는 중...', true);
         try {
@@ -221,7 +367,7 @@
         renderFilteredChannels();
         setOverlay('채널을 선택하세요.', true);
 
-        // 첫 번째 채널 자동 재생 (선택)
+        // 첫 번째 채널 자동 재생
         if (allChannels.length > 0 && !activeChannel) {
             playStream(allChannels[0]);
         }
@@ -252,7 +398,6 @@
             const item = document.createElement('div');
             item.className = 'm3u-channel-item' + (activeChannel === ch ? ' active' : '');
 
-            // 로고
             const logoBox = document.createElement('div');
             logoBox.className = 'm3u-logo-box';
 
@@ -269,7 +414,6 @@
                 logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>';
             }
 
-            // 채널명 및 실시간 EPG 프로그램
             const info = document.createElement('div');
             info.className = 'm3u-ch-info';
 
@@ -301,62 +445,6 @@
         } else {
             currentEpgTextEl.textContent = '편성표 정보 없음';
         }
-    }
-
-    function playStream(channel) {
-        activeChannel = channel;
-        currentTitleEl.textContent = channel.name;
-        currentGroupEl.textContent = channel.group || 'Live';
-        updateCurrentChannelEPG();
-
-        if (hlsInstance) {
-            hlsInstance.destroy();
-            hlsInstance = null;
-        }
-
-        const streamUrl = channel.url;
-
-        if (window.Hls && window.Hls.isSupported()) {
-            hlsInstance = new window.Hls({
-                enableWorker: true,
-                lowLatencyMode: true,
-                backBufferLength: 30
-            });
-
-            hlsInstance.loadSource(streamUrl);
-            hlsInstance.attachMedia(videoEl);
-
-            hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
-                setOverlay('', false);
-                videoEl.play().catch(e => console.log('[M3UPlayer] Play:', e));
-            });
-
-            hlsInstance.on(window.Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    switch (data.type) {
-                        case window.Hls.ErrorTypes.NETWORK_ERROR:
-                            setOverlay('스트림 연결 실패 (스트림 오프라인 또는 CORS)', true);
-                            hlsInstance.startLoad();
-                            break;
-                        case window.Hls.ErrorTypes.MEDIA_ERROR:
-                            hlsInstance.recoverMediaError();
-                            break;
-                        default:
-                            hlsInstance.destroy();
-                            setOverlay('재생할 수 없는 스트림입니다.', true);
-                            break;
-                    }
-                }
-            });
-        } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-            videoEl.src = streamUrl;
-            videoEl.addEventListener('loadedmetadata', () => {
-                setOverlay('', false);
-                videoEl.play().catch(e => console.log('[M3UPlayer] Play:', e));
-            });
-        }
-
-        renderFilteredChannels();
     }
 
     function setOverlay(msg, isVisible) {

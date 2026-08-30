@@ -14,7 +14,7 @@
     overflow: hidden !important;
 }
 
-/* [좌측] 비디오 플레이어 */
+/* ================= [좌측] 비디오 플레이어 영역 ================= */
 .m3u-player-section {
     display: flex !important;
     flex-direction: column !important;
@@ -118,6 +118,16 @@
     border-radius: 4px;
 }
 
+.m3u-engine-badge {
+    font-size: 0.68rem;
+    background: rgba(99, 102, 241, 0.2);
+    color: var(--app-accent, #818cf8);
+    border: 1px solid var(--app-accent, #818cf8);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-weight: 700;
+}
+
 .m3u-epg-now {
     font-size: 0.85rem;
     color: var(--app-accent, #818cf8);
@@ -130,7 +140,7 @@
     text-overflow: ellipsis;
 }
 
-/* [우측] 사이드바 */
+/* ================= [우측] 사이드바 영역 ================= */
 .m3u-sidebar-section {
     display: flex !important;
     flex-direction: column !important;

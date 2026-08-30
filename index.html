@@ -17,6 +17,7 @@
                 <div class="m3u-title-row">
                     <span id="m3uCurrentChannelTitle" class="m3u-title">재생 중인 채널이 없습니다</span>
                     <span id="m3uCurrentChannelGroup" class="m3u-group-badge">M3U</span>
+                    <span id="m3uStreamEngineBadge" class="m3u-engine-badge">ENGINE</span>
                 </div>
                 <!-- 실시간 EPG 정보 표시 -->
                 <div id="m3uCurrentEpgInfo" class="m3u-epg-now">
@@ -50,7 +51,7 @@
                     <i class="fa-solid fa-folder-open"></i> 파일 열기
                     <input type="file" id="m3uFileInput" accept=".m3u,.m3u8" style="display:none;">
                 </label>
-                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline" title="현재 입력된 주소를 기본값으로 저장">
+                <button id="m3uSaveDefaultBtn" class="m3u-btn m3u-btn-outline" title="현재 입력된 주소를 브라우저 기본값으로 저장">
                     <i class="fa-solid fa-bookmark"></i> 기본값 저장
                 </button>
             </div>
@@ -80,5 +81,7 @@
     </aside>
 </div>
 
-<!-- HLS.js CDN -->
+<!-- 1. HLS.js (m3u8 스트리밍) -->
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+<!-- 2. MPEGTS.js (TS 직접 스트림 / MPEG-TS / FLV 지원) -->
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
