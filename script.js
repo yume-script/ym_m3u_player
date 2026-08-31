@@ -27,6 +27,16 @@
     let timerInterval = null;
     let osdTimeout = null;
 
+    // 🪟 미니창(Document Picture-in-Picture) 상태.
+    // - docPipWindow: window.documentPictureInPicture.requestWindow()로 연 별도 창.
+    //   비디오 엘리먼트 자체를 이 창의 document로 옮겨서(reparent) hls.js/mpegts.js
+    //   인스턴스를 새로 만들지 않고 그대로 이어서 재생한다.
+    // - miniChannelBarEl: 미니창 안에 표시하는 채널명 바 (채널 전환 시 갱신됨).
+    // - 브라우저가 documentPictureInPicture API를 지원하지 않으면 videoEl의
+    //   네이티브 requestPictureInPicture()로 자동 대체한다.
+    let docPipWindow = null;
+    let miniChannelBarEl = null;
+
     // 이 카테고리탭 화면이 DOM에서 제거되는 순간(다른 사이드바 메뉴로 이동)을 감시하는 옵저버.
     let navigationObserver = null;
 
@@ -48,6 +58,7 @@
 
     // DOM Elements
     const videoEl = document.getElementById('m3uVideoPlayer');
+    const videoWrapperEl = document.getElementById('m3uVideoWrapper');
     const overlayEl = document.getElementById('m3uPlayerOverlay');
     const overlayText = document.getElementById('m3uOverlayText');
     const channelListEl = document.getElementById('m3uChannelList');
@@ -79,6 +90,7 @@
     const nextProgTextEl = document.getElementById('m3uNextProgramText');
     const currentFavIcon = document.getElementById('m3uCurrentFavIcon');
     const favCurrentBtn = document.getElementById('m3uFavCurrentBtn');
+    const miniWindowBtn = document.getElementById('m3uMiniWindowBtn');
 
     // TV OSD Elements
     const tvOsdEl = document.getElementById('m3uTvOsd');
@@ -104,6 +116,7 @@
         isInitialized = true;
 
         bindEvents();
+        updateMiniWindowButtonState();
         setupNavigationCleanupObserver();
         detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
 
@@ -225,8 +238,16 @@
         if (navigationObserver) { navigationObserver.disconnect(); navigationObserver = null; }
 
         if (document.pictureInPictureElement === videoEl) {
-            // PIP로 재생 중이면 그대로 유지하고, 사용자가 PIP를 닫는 시점에 정리한다.
+            // 네이티브 PIP로 재생 중이면 그대로 유지하고, 사용자가 PIP를 닫는 시점에 정리한다.
             videoEl.addEventListener('leavepictureinpicture', stopPlaybackForNavigation, { once: true });
+            return;
+        }
+
+        if (docPipWindow && !docPipWindow.closed) {
+            // 미니창(Document PIP)이 열려있는 동안은 다른 사이드바 메뉴로 이동해도 재생을
+            // 유지한다. 미니창을 닫을 때의 뒷정리는 attachDocPipCloseHandler()의
+            // pagehide 리스너가 담당한다(그 시점에 이 컨테이너가 여전히 숨겨져 있다면
+            // stopPlaybackForNavigation()을 호출한다).
             return;
         }
 
@@ -258,6 +279,7 @@
         onlyOnlineToggle.addEventListener('change', renderFilteredChannels);
 
         favCurrentBtn.addEventListener('click', toggleCurrentFavorite);
+        miniWindowBtn.addEventListener('click', toggleMiniWindow);
         openScheduleBtn.addEventListener('click', openScheduleView);
         closeModalBtn.addEventListener('click', () => scheduleModal.classList.add('hidden'));
 
@@ -297,6 +319,123 @@
         if (!activeChannel) return;
         const id = activeChannel.id || activeChannel.name;
         currentFavIcon.className = favorites.has(id) ? 'fa-solid fa-star' : 'fa-regular fa-star';
+    }
+
+    // ------------------------------------------------------------------
+    // 🪟 미니창(Document Picture-in-Picture)
+    // ------------------------------------------------------------------
+    // 버튼 클릭 시: 이미 열려있으면 닫고, 아니면 새로 연다.
+    async function toggleMiniWindow() {
+        if (docPipWindow && !docPipWindow.closed) {
+            docPipWindow.close(); // 뒷정리는 attachDocPipCloseHandler()의 pagehide에서 처리
+            return;
+        }
+        if (!activeChannel) {
+            alert('먼저 채널을 선택해주세요.');
+            return;
+        }
+        await openMiniWindow();
+    }
+
+    async function openMiniWindow() {
+        if (!videoWrapperEl) return;
+
+        // Document Picture-in-Picture API (Chromium 116+ 등): 비디오뿐 아니라 채널명
+        // 같은 임의의 DOM도 함께 담을 수 있는 항상-위(always-on-top) 미니창을 만든다.
+        // 지원하지 않는 브라우저에서는 네이티브 <video> PIP로 자동 대체한다.
+        if (window.documentPictureInPicture && typeof window.documentPictureInPicture.requestWindow === 'function') {
+            try {
+                const pipWindow = await window.documentPictureInPicture.requestWindow({
+                    width: 400,
+                    height: 260,
+                });
+
+                // 미니창은 호스트 페이지의 CSS를 상속하지 않으므로 최소한의 인라인
+                // 스타일만 직접 주입한다 (플레이어 전체 스타일시트를 옮기는 대신
+                // 검게 채우기 + 하단 채널명 바만 구성).
+                const style = pipWindow.document.createElement('style');
+                style.textContent = `
+                    html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+                    #m3uMiniVideoWrap { position: relative; width: 100%; height: 100%; }
+                    #m3uMiniVideoWrap video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+                    #m3uMiniChannelBar {
+                        position: absolute; left: 0; right: 0; bottom: 0;
+                        padding: 4px 8px; font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+                        color: #fff; background: rgba(0, 0, 0, 0.55);
+                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                    }
+                `;
+                pipWindow.document.head.appendChild(style);
+
+                const wrap = pipWindow.document.createElement('div');
+                wrap.id = 'm3uMiniVideoWrap';
+                const bar = pipWindow.document.createElement('div');
+                bar.id = 'm3uMiniChannelBar';
+                bar.textContent = activeChannel ? activeChannel.name : '';
+                wrap.appendChild(bar);
+                pipWindow.document.body.appendChild(wrap);
+
+                // 실제 <video> 엘리먼트를 미니창으로 옮긴다. 새로 만들지 않고 노드
+                // 자체를 reparent하므로 붙어있던 hls.js/mpegts.js 인스턴스가 끊기지
+                // 않고 그대로 이어서 재생된다.
+                wrap.prepend(videoEl);
+
+                miniChannelBarEl = bar;
+                docPipWindow = pipWindow;
+                updateMiniWindowButtonState();
+                attachDocPipCloseHandler(pipWindow);
+                setOverlay('🎬 미니창에서 재생 중입니다.', true);
+            } catch (e) {
+                console.warn('[M3UPlayer] 미니창 열기 실패, 네이티브 PIP로 대체합니다:', e && e.message);
+                await fallbackToNativePip();
+            }
+            return;
+        }
+
+        await fallbackToNativePip();
+    }
+
+    async function fallbackToNativePip() {
+        if (!videoEl.requestPictureInPicture) {
+            alert('이 브라우저는 미니창(PIP) 기능을 지원하지 않습니다.');
+            return;
+        }
+        try {
+            await videoEl.requestPictureInPicture();
+        } catch (e) {
+            alert('미니창을 여는 데 실패했습니다: ' + (e && e.message ? e.message : e));
+        }
+    }
+
+    // 미니창이 닫힐 때(사용자가 창을 직접 닫거나 close()를 호출한 경우) 비디오를
+    // 원래 자리로 되돌린다. 이 시점에 카테고리탭 자체가 이미 화면에서 사라진
+    // 상태였다면(=다른 사이드바 메뉴로 이동한 뒤 미니창만 닫은 경우) 재생을 완전히
+    // 정리하고, 여전히 화면에 보이는 상태라면 이어서 일반 인라인 재생으로 보여준다.
+    function attachDocPipCloseHandler(pipWindow) {
+        pipWindow.addEventListener('pagehide', () => {
+            if (videoWrapperEl && videoEl.parentNode !== videoWrapperEl) {
+                videoWrapperEl.prepend(videoEl);
+            }
+            docPipWindow = null;
+            miniChannelBarEl = null;
+            updateMiniWindowButtonState();
+
+            const rootEl = document.querySelector('.m3u-root');
+            if (!rootEl || isHiddenFromView(rootEl)) {
+                stopPlaybackForNavigation();
+            } else if (activeChannel) {
+                setOverlay('', false);
+            }
+        }, { once: true });
+    }
+
+    function updateMiniWindowButtonState() {
+        if (!miniWindowBtn) return;
+        const isOpen = !!(docPipWindow && !docPipWindow.closed);
+        miniWindowBtn.innerHTML = isOpen
+            ? '<i class="fa-solid fa-window-close"></i> 미니창 닫기'
+            : '<i class="fa-solid fa-clone"></i> 미니창';
+        miniWindowBtn.title = isOpen ? '미니창을 닫고 원래 화면으로 되돌리기' : '미니창(PIP)으로 분리해서 보기';
     }
 
     // 소스 관리 모달 열기
@@ -902,6 +1041,7 @@
         updateFavIcon();
         updateLiveProgress();
         showTvOSD(channel);
+        if (miniChannelBarEl) miniChannelBarEl.textContent = channel.name; // 미니창이 열려있다면 채널명도 갱신
 
         if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
         if (mpegtsPlayer) { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); mpegtsPlayer = null; }
