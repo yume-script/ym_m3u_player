@@ -7,6 +7,13 @@
     const CONFIG_SCOPE = 'general';
 
     let isInitialized = false;
+    // 소스 저장(POST /api/media/books/0/apply-metadata)은 서버에서 @admin_required이지만,
+    // 이 카테고리탭 자체는 관리자가 아닌 사용자에게도 권한 매트릭스로 노출될 수 있다.
+    // 그런 경우 예전에는 "소스 관리" 버튼이 무조건 노출되어, 일반 사용자가 값을 입력하고
+    // 저장을 누른 뒤에야 403으로 실패하는 것을 알 수 있었다. 아래 플래그로 관리자 여부를
+    // 미리 가볍게 판별해 버튼을 비활성화하고 이유를 안내한다.
+    // 판별 자체가 실패(네트워크 오류 등)하면 기존 동작을 그대로 유지하기 위해 기본값은 true로 둔다.
+    let isAdmin = true;
     let hlsInstance = null;
     let mpegtsPlayer = null;
     let allChannels = [];
@@ -98,6 +105,7 @@
 
         bindEvents();
         setupNavigationCleanupObserver();
+        detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
 
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
@@ -129,6 +137,7 @@
             const res = await fetch(`/api/media/dashboard/widgets/${PLUGIN_ID}/data?type=${CONFIG_SCOPE}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
+            if (data && data.success === false) throw new Error(data.error || 'success:false');
             if (data && Array.isArray(data.slots) && data.slots.length > 0) {
                 return data.slots;
             }
@@ -137,6 +146,28 @@
             console.warn('[M3UPlayer] 서버 설정 조회 실패, 로컬 백업값을 사용합니다:', e.message);
             return null;
         }
+    }
+
+    // 관리자 세션인지 가볍게 판별한다. 전용 "내가 관리자인지" API가 코어에 없어서,
+    // 이미 admin_required로 보호된 기존 엔드포인트(/api/media/metadata/plugins/manage,
+    // GET) 하나를 프로브로 재사용한다 — 데이터를 쓰지 않는 조회이고 이 플러그인의
+    // 소스 설정 저장 API(/api/media/books/0/apply-metadata)와 동일한 admin_required
+    // 데코레이터를 쓰므로, 이 프로브가 성공/실패하는지가 곧 소스 저장 가능 여부와 같다.
+    async function detectAdminAccess() {
+        try {
+            const res = await fetch('/api/media/metadata/plugins/manage', { method: 'GET' });
+            isAdmin = !(res.status === 401 || res.status === 403);
+        } catch (e) {
+            // 판별 자체가 실패(네트워크 오류 등)했다면 기존 동작을 유지한다(버튼 노출 유지).
+        }
+        applyAdminUiState();
+    }
+
+    function applyAdminUiState() {
+        if (!openSourceModalBtn) return;
+        openSourceModalBtn.disabled = !isAdmin;
+        openSourceModalBtn.title = isAdmin ? '' : '소스 설정 변경은 관리자 계정만 가능합니다.';
+        openSourceModalBtn.classList.toggle('m3u-disabled-hint', !isAdmin);
     }
 
     // 방송사 로고/썸네일 등 외부 도메인 이미지를 로컬 캐시 경유로 서빙하는 URL을 만든다.
@@ -270,6 +301,10 @@
 
     // 소스 관리 모달 열기
     function openSourceModal() {
+        if (!isAdmin) {
+            alert('소스 설정 변경은 관리자 계정만 가능합니다.');
+            return;
+        }
         sourceSlotsContainer.innerHTML = '';
         sourceSlots.forEach((slot, i) => {
             const card = document.createElement('div');
@@ -295,12 +330,22 @@
     }
 
     function escapeHtml(str) {
-        return (str || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // '&'를 가장 먼저 치환해야 한다 (뒤에서 만든 &quot; 등의 엔티티를 다시
+        // 이스케이프해버리는 것을 방지).
+        return (str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
     }
 
     // 소스 관리 모달 저장: 관리자 설정 화면(config_schema)과 동일한 저장소에
     // POST /api/media/books/0/apply-metadata -> apply() 를 통해 반영한다.
     async function saveSourcesFromModal() {
+        if (!isAdmin) {
+            alert('소스 설정 변경은 관리자 계정만 가능합니다.');
+            return;
+        }
         for (let i = 0; i < 5; i++) {
             const enableEl = document.getElementById(`slot_enable_${i}`);
             const nameEl = document.getElementById(`slot_name_${i}`);
@@ -332,6 +377,11 @@
                     item_data: { action: 'save_sources', slots: sourceSlots }
                 })
             });
+            if (res.status === 401 || res.status === 403) {
+                isAdmin = false;
+                applyAdminUiState();
+                throw new Error('권한이 없습니다 (관리자 계정만 소스 설정을 저장할 수 있습니다).');
+            }
             const result = await res.json().catch(() => null);
             if (!res.ok || (result && result.success === false)) {
                 throw new Error((result && result.message) || `HTTP ${res.status}`);
@@ -864,20 +914,44 @@
         videoEl.muted = !!isAutoplay;
 
         const streamUrl = channel.url.trim();
-        attemptPlayUrl(channel, streamUrl, false, myToken);
+        // 포맷 판별(TS 여부)은 항상 "원본" URL 기준으로 딱 한 번만 계산해서 프록시
+        // 재시도까지 그대로 들고 다닌다. 예전에는 이 판별을 attemptPlayUrl() 안에서
+        // 매번(프록시로 바뀐 URL에 대해서도) 다시 계산했는데, /api/webview/hls-proxy?url=...
+        // 형태의 프록시 URL은 인코딩 결과가 우연히 ".ts"로 안 끝나면 TS 스트림이
+        // 아닌 것으로 오판되어 mpegts.js 대신 hls.js/DIRECT로 잘못 재생을 시도하는
+        // 문제가 있었다. 또한 인증 토큰이 붙은 원본 URL(예: stream.ts?token=...)도
+        // endsWith('.ts')만으로는 놓칠 수 있어 쿼리스트링을 뗀 경로 부분만으로 판별한다.
+        const isTs = detectIsTs(streamUrl);
+        attemptPlayUrl(channel, streamUrl, false, myToken, isTs);
         renderFilteredChannels();
+    }
+
+    // URL의 path 부분(쿼리스트링/해시 제외)만 보고 .ts 확장자인지, 또는
+    // output=ts 같은 쿼리 파라미터로 TS 포맷을 명시하고 있는지 판별한다.
+    // 프록시로 치환되기 전, 원본 스트림 URL에 대해서만 호출해야 한다.
+    function detectIsTs(rawUrl) {
+        let pathPart = rawUrl;
+        try {
+            const u = new URL(rawUrl, window.location.href);
+            pathPart = u.pathname;
+            const outputParam = (u.searchParams.get('output') || '').toLowerCase();
+            if (outputParam === 'ts') return true;
+        } catch (e) {
+            // URL 파싱 실패 시(상대경로 등) 원본 문자열 그대로 폴백
+            const qIdx = rawUrl.indexOf('?');
+            pathPart = qIdx === -1 ? rawUrl : rawUrl.substring(0, qIdx);
+        }
+        return pathPart.toLowerCase().endsWith('.ts');
     }
 
     // url: 실제로 재생을 시도할 URL (원본 또는 프록시로 치환된 URL)
     // isViaProxy: getStreamProxyUrl로 이미 한 번 치환된 URL인지 여부.
     // token: 이 시도가 시작될 때의 playToken 스냅샷. 실행 중 playToken이 바뀌었다면(다른 채널로 전환됨)
     //        이 시도에서 파생된 모든 비동기 콜백은 아무 것도 하지 않고 조용히 무시한다.
-    function attemptPlayUrl(channel, url, isViaProxy, token) {
+    // isTs: 원본 URL 기준으로 미리 판별해둔 TS 포맷 여부 (playStream()/retryViaStreamProxy()에서 전달).
+    function attemptPlayUrl(channel, url, isViaProxy, token, isTs) {
         if (token !== playToken) return; // 이미 낡은 시도라 시작조차 하지 않는다
         const isStale = () => token !== playToken;
-
-        const lowerUrl = url.toLowerCase();
-        const isTs = lowerUrl.endsWith('.ts') || lowerUrl.includes('output=ts');
 
         const onFailure = () => {
             if (isStale()) return;
@@ -885,7 +959,7 @@
                 setChannelStatus(channel, 'offline');
                 setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
             } else {
-                retryViaStreamProxy(channel, url, token);
+                retryViaStreamProxy(channel, url, token, isTs);
             }
         };
 
@@ -946,7 +1020,7 @@
     // 근본 해결책이다(README 참고).
     // 화이트리스트 실패 시 getStreamProxyUrl 자체가 토스트 안내를 띄우고 null을 반환하므로
     // 여기서는 별도 알림 없이 오프라인 처리한다.
-    async function retryViaStreamProxy(channel, originalUrl, token) {
+    async function retryViaStreamProxy(channel, originalUrl, token, isTs) {
         if (token !== playToken) return; // 대기 중 다른 채널로 전환됐으면 아무 것도 하지 않는다
 
         if (!window.BookOasisPlugin || typeof window.BookOasisPlugin.getStreamProxyUrl !== 'function') {
@@ -967,7 +1041,10 @@
             return;
         }
 
-        attemptPlayUrl(channel, proxyUrl, true, token);
+        // 프록시 URL(/api/webview/hls-proxy?url=...)은 인코딩된 원본 URL을 쿼리스트링에
+        // 담고 있어 그 자체로는 포맷을 신뢰성 있게 판별할 수 없다. 원본 URL에서 이미
+        // 계산해둔 isTs 판정을 그대로 사용한다.
+        attemptPlayUrl(channel, proxyUrl, true, token, isTs);
     }
 
     function openScheduleView() {

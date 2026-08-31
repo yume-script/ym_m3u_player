@@ -157,7 +157,10 @@
 .m3u-toolbar-row { display: flex; gap: 0.4rem; margin-bottom: 0.5rem; }
 
 .m3u-active-sources-bar { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
-.m3u-source-tag { font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+/* 활성 소스 뱃지는 상태 표시색(LIVE/NOW/NEXT)과 달리 의미 고정색이 아니라 순수
+   장식용 UI이므로, 테마 강조색(--app-accent)을 따르도록 한다. 값이 없는 구버전
+   테마 대비 하위호환을 위해 기존 인디고 계열을 폴백으로 남겨둔다. */
+.m3u-source-tag { font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 4px; background: color-mix(in srgb, var(--app-accent, #6366f1) 15%, transparent); color: var(--app-accent, #818cf8); border: 1px solid color-mix(in srgb, var(--app-accent, #6366f1) 30%, transparent); }
 
 .m3u-input, .m3u-select {
     width: 100%;
@@ -271,10 +274,22 @@
 .m3u-btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
 .m3u-btn-primary { background: var(--app-accent, #6366f1); color: #ffffff; }
 .m3u-btn-primary:hover { background: var(--app-accent-hover, #4f46e5); }
-.m3u-btn-secondary { background: #0ea5e9; color: #ffffff; }
-.m3u-btn-secondary:hover { background: #0284c7; }
+/* 보조 버튼도 순수 장식색이라 테마 강조색을 따르게 한다 (기존 하늘색 계열은 폴백으로 유지). */
+.m3u-btn-secondary { background: var(--app-accent, #0ea5e9); color: #ffffff; }
+.m3u-btn-secondary:hover { background: var(--app-accent-hover, #0284c7); }
 .m3u-btn-outline { background: var(--app-bg-sidebar, #0f172a); color: var(--app-text-primary, #ffffff); border: 1px solid var(--app-border, rgba(255, 255, 255, 0.15)); }
 .m3u-btn-outline:hover { background: var(--app-bg-card-hover, #334155); }
+
+/* 관리자가 아닌 계정에게는 소스 관리 버튼을 비활성화 상태로 보여준다 (script.js의
+   applyAdminUiState 참고). 버튼 자체는 남겨서 "왜 안 되는지"를 title 툴팁으로
+   안내한다. */
+.m3u-btn.m3u-disabled-hint,
+.m3u-btn.m3u-disabled-hint:hover {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: var(--app-bg-card, #1e293b);
+    color: var(--app-text-muted, #94a3b8);
+}
 
 .m3u-schedule-item { display: flex; gap: 0.8rem; padding: 0.6rem 0.8rem; border-radius: 6px; background: var(--app-bg-main, #0f172a); font-size: 0.85rem; }
 .m3u-schedule-item.current { border-left: 3px solid #10b981; background: rgba(16, 185, 129, 0.12); }

@@ -9,7 +9,11 @@ BookOasis 카테고리탭 플러그인 - 5개 세트 M3U/EPG 소스를 등록해
 설정(5개 세트의 M3U/EPG URL 등)의 진짜 저장소는 더 이상 DB가 아니라
 파일이다:
 
-    ./plugins/data/ym_m3u_player/sources.json   (앱 실행 작업 디렉터리 기준 상대 경로)
+    <앱 루트>/plugins/data/ym_m3u_player/sources.json
+
+앱 루트는 이 파일 자신의 경로에서 "plugins" 디렉터리를 역산해 구한다
+(_resolve_app_root 참고) — 서버 프로세스의 현재 작업 디렉터리(cwd)에
+의존하지 않는다.
 
 이렇게 바꾼 이유: BookOasis 관리자 설정 화면(config_schema)에 입력한 값은
 BookOasis 코어가 자체 DB에 저장하는데, 이 DB는 컴퓨터를 옮기거나 재설치할 때
@@ -49,11 +53,35 @@ from plugins.metadata.base import BaseMetadataProvider
 
 
 # 이 플러그인의 설정 파일 경로(코드 위치 plugins/metadata/m3u_player/와는 별개;
-# 데이터 경로는 id(ym_m3u_player) 기준으로 잡는다).
-# google_links / rclone_g2g_copy 플러그인에서 확인된 것과 동일한 상대 경로 관례:
-# 앱 실행 작업 디렉터리(cwd) 기준 "./plugins/data/<플러그인id>/"를 그대로 쓴다.
+# 데이터 경로는 id(ym_m3u_player) 기준으로 잡는다). google_links / rclone_g2g_copy
+# 플러그인과 동일하게 plugins/data/<플러그인id>/ 관례를 따르되, 실제 절대경로는
+# cwd가 아니라 _resolve_app_root()로 계산한다.
 _PLUGIN_ID_FOR_PATH = "ym_m3u_player"
-DATA_DIR = os.path.join(".", "plugins", "data", _PLUGIN_ID_FOR_PATH)
+
+
+def _resolve_app_root():
+    """plugins/data/ 절대 경로를 앱 실행 cwd에 의존하지 않고 계산한다.
+
+    기존 코드는 os.path.join(".", "plugins", "data", ...) 처럼 현재 작업
+    디렉터리(cwd) 기준 상대경로를 썼는데, systemd/docker 등에서 서버가 다른
+    cwd로 기동되면 sources.json이 엉뚱한 위치에 생기거나 재시작할 때마다
+    새로 시드되는 문제가 있었다. 대신 이 파일 자신의 경로
+    (.../plugins/metadata/m3u_player/ym_m3u_player.py)에서 "plugins" 디렉터리를
+    역산해 앱 루트를 찾는다. 예상치 못한 배치 구조라 "plugins"를 못 찾으면
+    기존 동작(cwd 기준 상대경로)으로 안전하게 폴백한다.
+    """
+    this_dir = os.path.abspath(os.path.dirname(__file__))
+    parts = this_dir.split(os.sep)
+    if "plugins" in parts:
+        last_plugins_idx = len(parts) - 1 - parts[::-1].index("plugins")
+        root = os.sep.join(parts[:last_plugins_idx])
+        if root:
+            return root
+    # 폴백: 기존과 동일하게 cwd 기준
+    return "."
+
+
+DATA_DIR = os.path.join(_resolve_app_root(), "plugins", "data", _PLUGIN_ID_FOR_PATH)
 CONFIG_FILE = os.path.join(DATA_DIR, "sources.json")
 
 # 최초 설치 직후, sources.json이 아직 없을 때 관리자 설정 화면(config_schema)의
@@ -191,8 +219,14 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
             return config
 
         try:
-            gateway = self.get_db_gateway(CONFIG_SCOPE)
-            config = gateway.get_plugin_config(self.id, default={}) or {}
+            # ⚠️ 이전 버전 버그: gateway.get_plugin_config(self.id, ...)로 호출했었다.
+            # get_plugin_config()는 게이트웨이(get_db_gateway()의 반환값)의 메서드가
+            # 아니라 플러그인 베이스 클래스 자신(self)의 헬퍼이며 시그니처도
+            # self.get_plugin_config(db_type, default={}) 이다. 잘못된 호출이라
+            # 항상 AttributeError가 나서 여기 except에 조용히 삼켜졌고, 그 결과
+            # 관리자 설정 화면(config_schema)에 입력해둔 값이 한 번도 시드되지 못하고
+            # 매번 빈 설정({})으로만 sources.json이 생성되는 문제가 있었다.
+            config = self.get_plugin_config(CONFIG_SCOPE, default={}) or {}
         except Exception:
             config = {}
 
@@ -206,9 +240,17 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
     # ------------------------------------------------------------------
     # 카테고리탭 데이터 조회 (GET .../widgets/ym_m3u_player/data?type=...)
     # ------------------------------------------------------------------
-    def get_dashboard_data(self, db_type, limit=None):
+    def get_dashboard_data(self, db_type, limit=10):
+        # 코어 공통 계약(guide_plugins.md §3)은 {'success': True, 'items': [...]}
+        # 형태를 기본으로 하므로, 향후 다른 코어 화면이 이 엔드포인트를 공통 방식으로
+        # 다루더라도 깨지지 않도록 success/items를 함께 채워준다. 이 플러그인 자신의
+        # script.js는 여전히 커스텀 필드인 slots를 사용한다.
         config = self._load_config_with_db_seed(db_type)
-        return {"slots": self._slots_from_config(config)}
+        return {
+            "success": True,
+            "slots": self._slots_from_config(config),
+            "items": [],
+        }
 
     # ------------------------------------------------------------------
     # 카테고리탭 "소스 관리" 모달 저장 (POST .../books/0/apply-metadata)
