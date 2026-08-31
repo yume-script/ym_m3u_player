@@ -254,9 +254,27 @@
         stopPlaybackForNavigation();
     }
 
+    // hlsInstance/mpegtsPlayer 인스턴스를 안전하게 정리한다. 각 단계를 개별 try/catch로 감싸서,
+    // 이전 재생 시도가 실패로 반쯤 깨진 상태로 남겨둔 인스턴스를 정리하다가 예외가 나더라도
+    // 호출자(playStream/stopPlaybackForNavigation)가 절대 중간에 멈추지 않도록 보장한다.
+    // (과거에는 이 정리 코드가 예외를 던지면 playStream() 전체가 멈춰서, 이후 어떤 채널을
+    // 선택해도 재생이 시작되지 않고 하드 리프레시를 해야만 풀리는 문제가 있었다.)
+    function destroyPlayers() {
+        if (hlsInstance) {
+            try { hlsInstance.destroy(); } catch (e) { console.warn('[M3UPlayer] hlsInstance 정리 중 오류(무시하고 계속 진행):', e); }
+            hlsInstance = null;
+        }
+        if (mpegtsPlayer) {
+            try { mpegtsPlayer.pause(); } catch (e) { /* ignore */ }
+            try { mpegtsPlayer.unload(); } catch (e) { /* ignore */ }
+            try { mpegtsPlayer.detachMediaElement(); } catch (e) { /* ignore */ }
+            try { mpegtsPlayer.destroy(); } catch (e) { console.warn('[M3UPlayer] mpegtsPlayer 정리 중 오류(무시하고 계속 진행):', e); }
+            mpegtsPlayer = null;
+        }
+    }
+
     function stopPlaybackForNavigation() {
-        if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-        if (mpegtsPlayer) { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); mpegtsPlayer = null; }
+        destroyPlayers();
         try { videoEl.pause(); } catch (e) {}
         videoEl.removeAttribute('src');
         videoEl.load();
@@ -1110,8 +1128,7 @@
         showTvOSD(channel);
         if (miniChannelBarEl) miniChannelBarEl.textContent = channel.name; // 미니창이 열려있다면 채널명도 갱신
 
-        if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-        if (mpegtsPlayer) { mpegtsPlayer.pause(); mpegtsPlayer.unload(); mpegtsPlayer.detachMediaElement(); mpegtsPlayer.destroy(); mpegtsPlayer = null; }
+        destroyPlayers();
 
         // 이전 채널이 DIRECT(video.src) 방식으로 재생/실패했던 잔여 상태가 남아있으면
         // 다음 채널의 hls.js/mpegts.js attachMedia가 방해받을 수 있어 완전히 초기화한다.
@@ -1172,17 +1189,47 @@
 
         if (isTs && window.mpegts && window.mpegts.isSupported()) {
             engineBadgeEl.textContent = isViaProxy ? 'MPEG-TS (프록시)' : 'MPEG-TS';
+
+            // ⚠️ 버그 수정: 예전에는 이 분기에서 실패해도(createPlayer/attachMediaElement/load 예외,
+            // play() 프라미스 거부) 실패한 thisPlayer 인스턴스를 destroy()하지 않고 그대로 전역
+            // mpegtsPlayer에 남겨뒀다. 그 "반쯤 깨진" 인스턴스를 다음 채널 선택 시 playStream()의
+            // 정리 코드가 다시 건드리면서 내부적으로 예외를 던지고, 그 예외가 playStream() 자체를
+            // 중간에 멈춰버려 이후로는 어떤 채널을 눌러도 재생이 시작되지 않는(하드 리프레시 전까지)
+            // 문제가 있었다. HLS 분기처럼 실패 시 반드시 destroy() + 참조 해제하도록 통일한다.
+            let thisPlayer = null;
+            const cleanupThisPlayer = () => {
+                if (thisPlayer) {
+                    try { thisPlayer.destroy(); } catch (e) { /* 이미 깨진 인스턴스일 수 있어 무시 */ }
+                }
+                if (mpegtsPlayer === thisPlayer) mpegtsPlayer = null;
+            };
+
             try {
-                const thisPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url });
+                thisPlayer = window.mpegts.createPlayer({ type: 'mse', isLive: true, url });
                 mpegtsPlayer = thisPlayer;
+
+                // 초기 play() 실패뿐 아니라 재생 중간에 발생하는 네트워크 오류 등도 잡아서
+                // 정리하고 onFailure()로 넘긴다 (예전에는 이 리스너가 아예 없어서 재생 도중
+                // 스트림이 끊겨도 아무 처리 없이 화면만 멈춰 있었다).
+                if (window.mpegts.Events && window.mpegts.Events.ERROR) {
+                    thisPlayer.on(window.mpegts.Events.ERROR, () => {
+                        cleanupThisPlayer();
+                        if (!isStale()) onFailure();
+                    });
+                }
+
                 thisPlayer.attachMediaElement(videoEl);
                 thisPlayer.load();
                 thisPlayer.play().then(() => {
                     if (isStale()) return;
                     setOverlay('', false);
                     setChannelStatus(channel, 'online');
-                }).catch(() => { if (!isStale()) onFailure(); });
+                }).catch(() => {
+                    cleanupThisPlayer();
+                    if (!isStale()) onFailure();
+                });
             } catch (e) {
+                cleanupThisPlayer();
                 if (!isStale()) onFailure();
             }
         } else if (window.Hls && window.Hls.isSupported()) {
