@@ -57,7 +57,7 @@
     ];
 
     // DOM Elements
-    const videoEl = document.getElementById('m3uVideoPlayer');
+    let videoEl = document.getElementById('m3uVideoPlayer');
     const videoWrapperEl = document.getElementById('m3uVideoWrapper');
     const overlayEl = document.getElementById('m3uPlayerOverlay');
     const overlayText = document.getElementById('m3uOverlayText');
@@ -252,6 +252,37 @@
         }
 
         stopPlaybackForNavigation();
+    }
+
+    // 🩹 알려진 브라우저 MSE(hls.js/mpegts.js) 버그 대응: 어떤 <video> 엘리먼트에 붙였던
+    // MediaSource가 네트워크 오류(예: /api/webview/hls-proxy가 403/차단으로 스트림을 내려주지
+    // 못하는 경우) 등으로 fatal 상태에 빠지면, 일부 브라우저는 그 "같은" video 엘리먼트에
+    // 새 소스를 다시 붙여도 디코더 파이프라인이 복구되지 않고 계속 재생에 실패한다
+    // (destroy()/removeAttribute('src')/load()로 우리 쪽 상태는 다 정리해도, 브라우저 내부
+    // 디코더 자체가 망가진 채로 남는 경우). 지금까지 보고된 "실패한 채널을 고르면 그 다음부터
+    // 잘 나오던 채널도 안 나오고 Ctrl+F5를 해야 풀리는" 증상이 바로 이 케이스로 보인다.
+    // 근본 대응으로, 최종 실패(프록시까지 실패해 완전히 오프라인 판정)가 나면 <video> 엘리먼트
+    // 자체를 새 노드로 교체해 다음 채널 재생부터는 깨끗한 디코더로 시작하게 한다.
+    // 네이티브 PIP나 미니창(Document PIP)에 올라가 있는 동안은 노드를 통째로 바꾸면 그 세션
+    // 자체가 끊어지므로 건드리지 않는다.
+    function recreateVideoElement() {
+        if (!videoEl || !videoEl.parentNode) return;
+        if (document.pictureInPictureElement === videoEl) return;
+        if (docPipWindow && !docPipWindow.closed) return;
+
+        const parent = videoEl.parentNode;
+        const nextSibling = videoEl.nextSibling;
+        const wasMuted = videoEl.muted;
+
+        const fresh = document.createElement('video');
+        fresh.id = videoEl.id;
+        fresh.controls = true;
+        fresh.playsInline = true;
+        fresh.muted = wasMuted;
+
+        parent.insertBefore(fresh, nextSibling);
+        parent.removeChild(videoEl);
+        videoEl = fresh;
     }
 
     // hlsInstance/mpegtsPlayer 인스턴스를 안전하게 정리한다. 각 단계를 개별 try/catch로 감싸서,
@@ -1182,6 +1213,7 @@
             if (isViaProxy) {
                 setChannelStatus(channel, 'offline');
                 setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
+                recreateVideoElement(); // 다음 채널 재생을 위해 <video> 엘리먼트를 깨끗한 상태로 교체
             } else {
                 retryViaStreamProxy(channel, url, token, isTs);
             }
