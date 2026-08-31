@@ -352,7 +352,7 @@
 
                 // 미니창은 호스트 페이지의 CSS를 상속하지 않으므로 최소한의 인라인
                 // 스타일만 직접 주입한다 (플레이어 전체 스타일시트를 옮기는 대신
-                // 검게 채우기 + 하단 채널명 바만 구성).
+                // 검게 채우기 + 하단 채널명 바 + 좌우 채널 이동 버튼만 구성).
                 const style = pipWindow.document.createElement('style');
                 style.textContent = `
                     html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
@@ -360,10 +360,22 @@
                     #m3uMiniVideoWrap video { width: 100%; height: 100%; object-fit: contain; background: #000; }
                     #m3uMiniChannelBar {
                         position: absolute; left: 0; right: 0; bottom: 0;
-                        padding: 4px 8px; font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+                        padding: 4px 44px; font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
                         color: #fff; background: rgba(0, 0, 0, 0.55);
                         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                        text-align: center;
                     }
+                    .m3u-mini-nav-btn {
+                        position: absolute; top: 50%; transform: translateY(-50%);
+                        width: 32px; height: 32px; border-radius: 50%; border: none;
+                        background: rgba(0, 0, 0, 0.4); color: #fff; font-size: 14px;
+                        cursor: pointer; opacity: 0.35; transition: opacity 0.15s ease;
+                        display: flex; align-items: center; justify-content: center;
+                    }
+                    #m3uMiniVideoWrap:hover .m3u-mini-nav-btn { opacity: 0.85; }
+                    .m3u-mini-nav-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.65); }
+                    .m3u-mini-prev { left: 6px; }
+                    .m3u-mini-next { right: 6px; }
                 `;
                 pipWindow.document.head.appendChild(style);
 
@@ -373,7 +385,35 @@
                 bar.id = 'm3uMiniChannelBar';
                 bar.textContent = activeChannel ? activeChannel.name : '';
                 wrap.appendChild(bar);
+
+                // 좌/우 채널 이동 버튼: 미니창에는 채널 목록이 안 보이므로 최소한
+                // 위/아래(이전/다음) 채널 전환만이라도 가능하게 한다. 기존
+                // switchChannelRelative()를 그대로 재사용한다 (JS 실행 컨텍스트는
+                // 미니창이 아니라 원래 문서의 것이므로 클로저 함수를 그대로 쓸 수 있다).
+                const prevBtn = pipWindow.document.createElement('button');
+                prevBtn.type = 'button';
+                prevBtn.className = 'm3u-mini-nav-btn m3u-mini-prev';
+                prevBtn.setAttribute('aria-label', '이전 채널');
+                prevBtn.textContent = '◀';
+                prevBtn.addEventListener('click', () => switchChannelRelative(-1));
+
+                const nextBtn = pipWindow.document.createElement('button');
+                nextBtn.type = 'button';
+                nextBtn.className = 'm3u-mini-nav-btn m3u-mini-next';
+                nextBtn.setAttribute('aria-label', '다음 채널');
+                nextBtn.textContent = '▶';
+                nextBtn.addEventListener('click', () => switchChannelRelative(1));
+
+                wrap.appendChild(prevBtn);
+                wrap.appendChild(nextBtn);
                 pipWindow.document.body.appendChild(wrap);
+
+                // 미니창이 포커스를 가진 상태에서는 키 입력이 원래 문서(main window)로
+                // 전달되지 않으므로, 미니창 자체에도 ↑/↓ 채널 전환 단축키를 별도로 건다.
+                pipWindow.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); switchChannelRelative(1); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); switchChannelRelative(-1); }
+                });
 
                 // 실제 <video> 엘리먼트를 미니창으로 옮긴다. 새로 만들지 않고 노드
                 // 자체를 reparent하므로 붙어있던 hls.js/mpegts.js 인스턴스가 끊기지
@@ -548,6 +588,13 @@
     // getProxyUrl 자체는 화이트리스트 검증에 실패하면 자체적으로 토스트 안내를 띄우고 null을 반환하므로
     // 여기서는 별도 알림 없이 실패로 처리하되, 프록시가 반환하는 {"success":false,"error":...,"message":...}
     // 형태의 에러 본문이 있으면 그 메시지를 그대로 노출한다(사설 IP 차단/응답 초과 등 원인을 알 수 있게).
+    //
+    // ⚠️ /api/webview/proxy는 이제 GET뿐 아니라 POST(바디 릴레이)도 지원한다(guide_plugins.md 갱신
+    // 내용 참고, 요청 256KB/응답 1MB 캡). 원래 DRM 라이선스 요청처럼 "바디가 있는 POST가 필요한
+    // 외부 API"를 위한 기능이라 대부분의 M3U/EPG 서버에는 해당되지 않지만, GET을 아예 거부(405)하는
+    // 일부 사설 IPTV 패널(Xtream-Codes 계열 커스텀 API 등)을 위해 최후 수단으로 POST 릴레이도
+    // 시도한다. 화이트리스트 차단(403)/응답 초과(413) 등 메서드와 무관한 오류는 POST로 바꿔도
+    // 해결되지 않으므로 그 경우엔 즉시 원래 에러로 실패 처리한다.
     async function fetchTextWithCorsFallback(url) {
         try {
             const res = await fetch(url);
@@ -556,19 +603,39 @@
             console.warn(`[M3UPlayer] Direct fetch failed for ${url}, trying core proxy (getProxyUrl)...`);
         }
 
-        if (window.BookOasisPlugin && typeof window.BookOasisPlugin.getProxyUrl === 'function') {
-            const proxyUrl = await window.BookOasisPlugin.getProxyUrl(url);
-            if (proxyUrl) {
-                const res = await fetch(proxyUrl);
-                if (res.ok) return await res.text();
-                const errBody = await res.json().catch(() => null);
-                if (errBody && errBody.message) {
-                    throw new Error(errBody.message);
-                }
-            }
+        if (!(window.BookOasisPlugin && typeof window.BookOasisPlugin.getProxyUrl === 'function')) {
+            throw new Error('CORS 차단 또는 서버 응답 없음');
         }
 
-        throw new Error('CORS 차단 또는 서버 응답 없음');
+        const proxyUrl = await window.BookOasisPlugin.getProxyUrl(url);
+        if (!proxyUrl) {
+            throw new Error('CORS 차단 또는 서버 응답 없음');
+        }
+
+        // 1차: GET 릴레이 — 대부분의 M3U/EPG 서버는 이걸로 충분하다.
+        let getStatus = null;
+        let getErrBody = null;
+        try {
+            const res = await fetch(proxyUrl);
+            if (res.ok) return await res.text();
+            getStatus = res.status;
+            getErrBody = await res.json().catch(() => null);
+        } catch (e) {
+            getStatus = null; // 네트워크 자체 실패(응답을 아예 못 받음) - 아래에서 POST로 계속 시도한다
+        }
+
+        // 메서드와 무관한 오류(화이트리스트 차단 403, 응답 초과 413, scheme 오류 400 등)는
+        // POST로 재시도해도 동일하게 실패하므로 즉시 실패 처리한다.
+        if (getStatus !== null && getStatus !== 405) {
+            throw new Error((getErrBody && getErrBody.message) || `HTTP ${getStatus}`);
+        }
+
+        // 2차: POST 릴레이 (최후 수단)
+        console.warn(`[M3UPlayer] GET 프록시 실패(status=${getStatus}), POST 릴레이로 재시도합니다: ${url}`);
+        const postRes = await fetch(proxyUrl, { method: 'POST' });
+        if (postRes.ok) return await postRes.text();
+        const postErrBody = await postRes.json().catch(() => null);
+        throw new Error((postErrBody && postErrBody.message) || `HTTP ${postRes.status}`);
     }
 
     // 전체 활성 소스 로드
@@ -1160,8 +1227,12 @@
     // 근본 해결책이다(README 참고).
     // 화이트리스트 실패 시 getStreamProxyUrl 자체가 토스트 안내를 띄우고 null을 반환하므로
     // 여기서는 별도 알림 없이 오프라인 처리한다.
+    // 참고: /api/webview/hls-proxy도 이제 GET 외에 POST(바디 릴레이)를 지원하지만, 이는
+    // Widevine/PlayReady 같은 DASH DRM 라이선스 서버용이다. 이 플러그인은 DRM 없는 순수
+    // HLS/MPEG-TS 채널만 다루므로 스트림 재생 경로에서는 항상 GET만 사용한다.
     async function retryViaStreamProxy(channel, originalUrl, token, isTs) {
         if (token !== playToken) return; // 대기 중 다른 채널로 전환됐으면 아무 것도 하지 않는다
+
 
         if (!window.BookOasisPlugin || typeof window.BookOasisPlugin.getStreamProxyUrl !== 'function') {
             setChannelStatus(channel, 'offline');
