@@ -790,11 +790,25 @@
             updateLiveProgress();
         });
 
-        // 2. M3U 재생목록 로드 — 소스가 도착하는 대로 즉시 목록에 반영한다.
-        // 예전에는 Promise.allSettled로 "모든" 소스가 끝날 때까지 기다린 뒤에야 화면에 한 번에
-        // 렌더링했는데, 응답이 느리거나 없는(hang) 소스 하나 때문에 이미 다 받아온 다른 소스의
-        // 채널까지 함께 늦게 표시되는 문제가 있었다(카테고리탭 진입 시 "화면이 늦게 뜬다"는 원인).
+        // 2. M3U 재생목록 로드 — 소스가 도착하는 대로 즉시 목록에 반영하되, 항상 슬롯 순서
+        // (1→5)대로 병합한다. 예전(수정 전)에는 Promise.allSettled로 "모든" 소스가 끝날
+        // 때까지 기다린 뒤에야 화면에 한 번에 렌더링했는데, 응답이 느리거나 없는(hang) 소스
+        // 하나 때문에 이미 다 받아온 다른 소스의 채널까지 함께 늦게 표시되는 문제가 있었다.
+        // 그래서 "도착하는 대로 즉시 concat"하도록 바꿨더니, 이번엔 응답이 더 빠른 슬롯(예:
+        // 2번 iptv-org)이 더 느린 슬롯(예: 1번 개인 서버)보다 먼저 도착해서 화면에 앞서
+        // 나타나는 순서 역전 버그가 생겼다. 슬롯 인덱스별로 결과를 저장해두고, 매번 인덱스
+        // 순서대로(아직 안 온 슬롯은 건너뛰고) 다시 이어붙이는 방식으로 "도착 순서와 무관하게
+        // 항상 슬롯 순서"를 보장한다.
         let firstChannelAutoplayed = false;
+        const channelsBySlot = new Array(activeSlots.length).fill(null); // null = 아직 미도착
+
+        const rebuildAllChannelsInSlotOrder = () => {
+            allChannels = [];
+            channelsBySlot.forEach(chs => {
+                if (Array.isArray(chs)) allChannels = allChannels.concat(chs);
+            });
+        };
+
         const rebuildGroupOptions = () => {
             const groups = new Set();
             allChannels.forEach(c => { if (c.group) groups.add(c.group); });
@@ -815,23 +829,27 @@
             }
         };
 
-        const m3uPromises = activeSlots.map(s =>
-            loadM3UFile(s.m3u.trim(), s.name).then(channels => {
-                if (channels.length > 0) {
-                    allChannels = allChannels.concat(channels);
-                    channelCountEl.textContent = allChannels.length;
-                    rebuildGroupOptions();
-                    renderFilteredChannels();
-                    setOverlay('채널을 선택하세요.', true);
+        const onSlotSettled = (idx, channels) => {
+            channelsBySlot[idx] = channels; // 도착 순서와 무관하게 항상 슬롯 인덱스 자리에 저장
+            rebuildAllChannelsInSlotOrder(); // 매번 슬롯 순서대로 처음부터 다시 이어붙인다
+            channelCountEl.textContent = allChannels.length;
+            rebuildGroupOptions();
+            renderFilteredChannels();
 
-                    if (!firstChannelAutoplayed && !activeChannel) {
-                        firstChannelAutoplayed = true;
-                        // 페이지 로드 직후의 자동재생은 사용자 제스처가 없으므로 음소거 상태로 시작
-                        playStream(allChannels[0], true);
-                    }
+            if (allChannels.length > 0) {
+                setOverlay('채널을 선택하세요.', true);
+                if (!firstChannelAutoplayed && !activeChannel) {
+                    firstChannelAutoplayed = true;
+                    // 페이지 로드 직후의 자동재생은 사용자 제스처가 없으므로 음소거 상태로 시작
+                    playStream(allChannels[0], true);
                 }
-                return channels;
-            })
+            }
+        };
+
+        const m3uPromises = activeSlots.map((s, idx) =>
+            loadM3UFile(s.m3u.trim(), s.name)
+                .then(channels => onSlotSettled(idx, channels))
+                .catch(() => onSlotSettled(idx, []))
         );
 
         await Promise.allSettled(m3uPromises);
