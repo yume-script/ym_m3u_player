@@ -43,6 +43,49 @@
     // "교체 타이밍과 다음 채널 선택 타이밍이 꼬이는" 레이스를 원천적으로 없앤다.
     let videoNeedsRecreate = false;
 
+    // ⚠️ 버그 수정: 이 카테고리탭의 index.html은 코어가 innerHTML로 DOM에 주입하는 방식이라,
+    // 원래 index.html 맨 아래 있던 <script src="...hls.min.js"></script> /
+    // <script src="...mpegts.min.js"></script> 태그는 브라우저가 절대 실행하지 않는다
+    // (innerHTML로 파싱된 <script> 태그는 실행되지 않는 것이 HTML 표준 동작이다). 그래서
+    // window.Hls/window.mpegts가 항상 undefined였고, 모든 채널이 매번 hls.js/mpegts.js 없이
+    // 네이티브 <video> DIRECT 재생으로 강등되어 거의 항상 실패하고 있었다 — 지금까지 "CORS
+    // 차단"으로 보였던 실패의 상당수가 실은 이 문제였을 가능성이 크다.
+    // document.createElement('script') + appendChild로 "실제 JS 코드(script.js)" 안에서
+    // 직접 삽입하는 스크립트는 정상적으로 실행되므로, 여기서 명시적으로 로드한다.
+    const HLS_JS_URL = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js';
+    const MPEGTS_JS_URL = 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js';
+
+    function loadExternalScript(src) {
+        return new Promise((resolve, reject) => {
+            const existing = document.querySelector(`script[src="${src}"]`);
+            if (existing) {
+                if (existing.dataset.m3uLoaded === 'true') { resolve(); return; }
+                existing.addEventListener('load', () => resolve());
+                existing.addEventListener('error', () => reject(new Error(`스크립트 로드 실패: ${src}`)));
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = src;
+            script.async = true;
+            script.onload = () => { script.dataset.m3uLoaded = 'true'; resolve(); };
+            script.onerror = () => reject(new Error(`스크립트 로드 실패: ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    // 페이지 안에 이미 다른 경로로 hls.js/mpegts.js가 로드돼 있을 수도 있으니(window.Hls/
+    // window.mpegts 존재 여부로) 중복 로드를 피한다. 하나의 Promise로 캐싱해서 여러 번
+    // 호출돼도(여러 채널을 빠르게 연달아 누르는 경우 등) 스크립트 태그가 중복 추가되지 않는다.
+    let externalLibsReady = null;
+    function ensureExternalLibsLoaded() {
+        if (externalLibsReady) return externalLibsReady;
+        externalLibsReady = Promise.allSettled([
+            window.Hls ? Promise.resolve() : loadExternalScript(HLS_JS_URL),
+            window.mpegts ? Promise.resolve() : loadExternalScript(MPEGTS_JS_URL),
+        ]);
+        return externalLibsReady;
+    }
+
     // 이 카테고리탭 화면이 DOM에서 제거되는 순간(다른 사이드바 메뉴로 이동)을 감시하는 옵저버.
     let navigationObserver = null;
 
@@ -125,6 +168,7 @@
         updateMiniWindowButtonState();
         setupNavigationCleanupObserver();
         detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
+        ensureExternalLibsLoaded(); // hls.js/mpegts.js를 최대한 일찍 미리 로드 시작 (아래 M3U/EPG 로딩과 병렬)
 
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
@@ -1261,8 +1305,15 @@
     // token: 이 시도가 시작될 때의 playToken 스냅샷. 실행 중 playToken이 바뀌었다면(다른 채널로 전환됨)
     //        이 시도에서 파생된 모든 비동기 콜백은 아무 것도 하지 않고 조용히 무시한다.
     // isTs: 원본 URL 기준으로 미리 판별해둔 TS 포맷 여부 (playStream()/retryViaStreamProxy()에서 전달).
-    function attemptPlayUrl(channel, url, isViaProxy, token, isTs) {
+    async function attemptPlayUrl(channel, url, isViaProxy, token, isTs) {
         if (token !== playToken) return; // 이미 낡은 시도라 시작조차 하지 않는다
+
+        // hls.js/mpegts.js가 아직 로딩 중이면(카테고리탭 진입 직후 첫 재생 시도 등) 여기서
+        // 기다린다 — 이 대기 없이 바로 아래 window.Hls/window.mpegts 체크로 넘어가면 항상
+        // "아직 undefined"로 읽혀서 깨진 네이티브 DIRECT 재생으로 잘못 강등되곤 했다.
+        await ensureExternalLibsLoaded();
+        if (token !== playToken) return; // 로딩을 기다리는 사이 다른 채널로 전환됐을 수 있다
+
         const isStale = () => token !== playToken;
 
         const onFailure = () => {

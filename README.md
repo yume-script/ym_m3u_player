@@ -149,7 +149,10 @@ plugins/data/ym_m3u_player/           # 데이터 (재설치·이전해도 보�
   피하기 위해 음소거 상태로 시작합니다. 필요 시 플레이어 컨트롤로 음소거를 해제하세요.
 - **XSS 방어**: 채널명, 그룹명, EPG 타이틀 등 외부에서 온 값은 모두 `textContent`/이스케이프 처리로
   렌더링하며, `innerHTML`에 신뢰할 수 없는 값을 직접 삽입하지 않습니다.
-- **리소스 격리**: 외부 의존성 없이 CDN을 통해 `hls.js` 및 `mpegts.js`를 로드합니다.
+- **리소스 격리**: 외부 의존성 없이 CDN을 통해 `hls.js` 및 `mpegts.js`를 로드합니다. 이 카테고리탭
+  화면은 코어가 `index.html` 문자열을 `innerHTML`로 주입하는 방식이라, HTML 안에 `<script src="...">`
+  태그를 그대로 두면 브라우저가 실행하지 않습니다(HTML 표준 동작) — 그래서 두 라이브러리는
+  `script.js`가 `document.createElement('script')`로 직접 삽입해서 로드합니다.
 
 ## 📌 알려진 제약 사항
 
