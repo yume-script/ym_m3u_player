@@ -37,6 +37,12 @@
     let docPipWindow = null;
     let miniChannelBarEl = null;
 
+    // 직전 채널이 프록시까지 실패해서 최종 오프라인 판정이 났을 때 true로 세팅된다.
+    // 실제 <video> 엘리먼트 교체(recreateVideoElement)는 여기서 바로 하지 않고, 다음
+    // playStream() 시작 시점에 동기적으로(그 채널의 어떤 재생 시도보다도 먼저) 수행해서
+    // "교체 타이밍과 다음 채널 선택 타이밍이 꼬이는" 레이스를 원천적으로 없앤다.
+    let videoNeedsRecreate = false;
+
     // 이 카테고리탭 화면이 DOM에서 제거되는 순간(다른 사이드바 메뉴로 이동)을 감시하는 옵저버.
     let navigationObserver = null;
 
@@ -628,6 +634,21 @@
         }
     }
 
+    // fetch에 타임아웃을 건다. 브라우저 fetch()는 기본적으로 타임아웃이 없어서, 응답이
+    // 없는(사설 IP라 연결은 되는데 응답이 없는 등) 소스 하나가 전체 로딩을 수십 초~수 분간
+    // 붙잡고 있을 수 있다 — "화면이 늦게 뜬다"는 문제의 주 원인 중 하나였다.
+    async function fetchWithTimeout(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            return await fetch(url, { ...options, signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    const TEXT_FETCH_TIMEOUT_MS = 8000; // M3U/EPG 텍스트 조회 1회 시도당 최대 대기 시간
+
     // 📄 텍스트 파일(M3U/EPG) 조회: 직접 fetch를 우선 시도하고, 실패하면
     // 코어가 제공하는 window.BookOasisPlugin.getProxyUrl()(/api/webview/proxy 경유)로 재시도한다.
     // (공개 CORS 우회 프록시를 쓰지 않는다 — 등록한 URL이 외부 제3자 서버로 전달되지 않도록
@@ -644,9 +665,13 @@
     // 일부 사설 IPTV 패널(Xtream-Codes 계열 커스텀 API 등)을 위해 최후 수단으로 POST 릴레이도
     // 시도한다. 화이트리스트 차단(403)/응답 초과(413) 등 메서드와 무관한 오류는 POST로 바꿔도
     // 해결되지 않으므로 그 경우엔 즉시 원래 에러로 실패 처리한다.
+    //
+    // ⏱️ 각 시도(직접/GET 프록시/POST 프록시)마다 최대 TEXT_FETCH_TIMEOUT_MS(8초)만 기다린다.
+    // 응답 없는(hang) 소스 하나 때문에 loadAllSources()의 Promise.allSettled 전체가 늦게
+    // 끝나서 카테고리탭 진입 시 채널 목록이 늦게 뜨는 문제를 막기 위함이다.
     async function fetchTextWithCorsFallback(url) {
         try {
-            const res = await fetch(url);
+            const res = await fetchWithTimeout(url, undefined, TEXT_FETCH_TIMEOUT_MS);
             if (res.ok) return await res.text();
         } catch (e) {
             console.warn(`[M3UPlayer] Direct fetch failed for ${url}, trying core proxy (getProxyUrl)...`);
@@ -665,12 +690,12 @@
         let getStatus = null;
         let getErrBody = null;
         try {
-            const res = await fetch(proxyUrl);
+            const res = await fetchWithTimeout(proxyUrl, undefined, TEXT_FETCH_TIMEOUT_MS);
             if (res.ok) return await res.text();
             getStatus = res.status;
             getErrBody = await res.json().catch(() => null);
         } catch (e) {
-            getStatus = null; // 네트워크 자체 실패(응답을 아예 못 받음) - 아래에서 POST로 계속 시도한다
+            getStatus = null; // 네트워크 자체 실패(타임아웃 포함) - 아래에서 POST로 계속 시도한다
         }
 
         // 메서드와 무관한 오류(화이트리스트 차단 403, 응답 초과 413, scheme 오류 400 등)는
@@ -681,7 +706,7 @@
 
         // 2차: POST 릴레이 (최후 수단)
         console.warn(`[M3UPlayer] GET 프록시 실패(status=${getStatus}), POST 릴레이로 재시도합니다: ${url}`);
-        const postRes = await fetch(proxyUrl, { method: 'POST' });
+        const postRes = await fetchWithTimeout(proxyUrl, { method: 'POST' }, TEXT_FETCH_TIMEOUT_MS);
         if (postRes.ok) return await postRes.text();
         const postErrBody = await postRes.json().catch(() => null);
         throw new Error((postErrBody && postErrBody.message) || `HTTP ${postRes.status}`);
@@ -721,40 +746,54 @@
             updateLiveProgress();
         });
 
-        // 2. M3U 재생목록 병렬 로드
-        const m3uPromises = activeSlots.map(s => loadM3UFile(s.m3u.trim(), s.name));
-        const m3uResults = await Promise.allSettled(m3uPromises);
-
-        let mergedChannels = [];
-        m3uResults.forEach(res => {
-            if (res.status === 'fulfilled' && Array.isArray(res.value)) {
-                mergedChannels = mergedChannels.concat(res.value);
+        // 2. M3U 재생목록 로드 — 소스가 도착하는 대로 즉시 목록에 반영한다.
+        // 예전에는 Promise.allSettled로 "모든" 소스가 끝날 때까지 기다린 뒤에야 화면에 한 번에
+        // 렌더링했는데, 응답이 느리거나 없는(hang) 소스 하나 때문에 이미 다 받아온 다른 소스의
+        // 채널까지 함께 늦게 표시되는 문제가 있었다(카테고리탭 진입 시 "화면이 늦게 뜬다"는 원인).
+        let firstChannelAutoplayed = false;
+        const rebuildGroupOptions = () => {
+            const groups = new Set();
+            allChannels.forEach(c => { if (c.group) groups.add(c.group); });
+            const currentSelection = groupSelectEl.value;
+            groupSelectEl.innerHTML = `
+                <option value="">전체 그룹 (All)</option>
+                <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
+            `;
+            Array.from(groups).sort().forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g;
+                opt.textContent = g;
+                groupSelectEl.appendChild(opt);
+            });
+            // 다시 그리는 동안 사용자가 골라둔 그룹 필터가 남아있으면 유지한다.
+            if (Array.from(groupSelectEl.options).some(o => o.value === currentSelection)) {
+                groupSelectEl.value = currentSelection;
             }
-        });
+        };
 
-        allChannels = mergedChannels;
-        channelCountEl.textContent = allChannels.length;
+        const m3uPromises = activeSlots.map(s =>
+            loadM3UFile(s.m3u.trim(), s.name).then(channels => {
+                if (channels.length > 0) {
+                    allChannels = allChannels.concat(channels);
+                    channelCountEl.textContent = allChannels.length;
+                    rebuildGroupOptions();
+                    renderFilteredChannels();
+                    setOverlay('채널을 선택하세요.', true);
 
-        const groups = new Set();
-        allChannels.forEach(c => { if (c.group) groups.add(c.group); });
+                    if (!firstChannelAutoplayed && !activeChannel) {
+                        firstChannelAutoplayed = true;
+                        // 페이지 로드 직후의 자동재생은 사용자 제스처가 없으므로 음소거 상태로 시작
+                        playStream(allChannels[0], true);
+                    }
+                }
+                return channels;
+            })
+        );
 
-        groupSelectEl.innerHTML = `
-            <option value="">전체 그룹 (All)</option>
-            <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
-        `;
-        Array.from(groups).sort().forEach(g => {
-            const opt = document.createElement('option');
-            opt.value = g;
-            opt.textContent = g;
-            groupSelectEl.appendChild(opt);
-        });
+        await Promise.allSettled(m3uPromises);
 
-        renderFilteredChannels();
-        setOverlay('채널을 선택하세요.', true);
-
-        if (allChannels.length > 0 && !activeChannel) {
-            // 페이지 로드 직후의 자동재생은 사용자 제스처가 없으므로 음소거 상태로 시작
-            playStream(allChannels[0], true);
+        if (allChannels.length === 0) {
+            setOverlay('활성화된 소스에서 채널을 찾지 못했습니다.\n[⚙️ 소스 관리]에서 M3U 주소를 확인해주세요.', true);
         }
     }
 
@@ -1152,12 +1191,30 @@
         activeChannel = channel;
         const myToken = ++playToken; // 이번 재생 시도의 고유 토큰
 
+        // 직전 채널이 최종 실패(프록시까지 실패)했던 경우, 그 채널의 실패 처리 코드가 세워둔
+        // videoNeedsRecreate 플래그를 여기서 — 이번 채널의 그 어떤 재생 시도(destroyPlayers,
+        // attachMedia 등)보다도 먼저 — 동기적으로 처리한다. 순서를 여기서 강제하기 때문에
+        // "실패 처리 중 비동기로 교체하다가 그 사이 다음 채널이 낡은 엘리먼트를 먼저 잡아버리는"
+        // 레이스가 생기지 않는다. (네이티브 PIP/미니창 중이면 recreateVideoElement가 스스로 무시한다.)
+        if (videoNeedsRecreate) {
+            videoNeedsRecreate = false;
+            recreateVideoElement();
+        }
+
         currentTitleEl.textContent = channel.name;
         currentGroupEl.textContent = channel.group || 'Live';
         updateFavIcon();
         updateLiveProgress();
         showTvOSD(channel);
         if (miniChannelBarEl) miniChannelBarEl.textContent = channel.name; // 미니창이 열려있다면 채널명도 갱신
+
+        // ⚠️ 버그 수정: 이전 채널이 실패해서 오버레이에 "스트림 연결 실패 (오프라인 / CORS 차단)"
+        // 메시지가 떠 있는 상태로 새 채널을 선택하면, 새 채널의 재생 성공/실패가 확정되기 전까지
+        // (특히 HLS 매니페스트 파싱처럼 몇백ms~몇 초 걸리는 경우) 그 오래된 실패 메시지가 화면에
+        // 그대로 남아있어서 "방금 전 실패했던 채널과 똑같이 이 채널도 CORS에 막혔다"고 오인하게
+        // 만들었다. 새 채널 재생을 시작하는 시점에 즉시 중립적인 "연결 중..." 상태로 덮어써서
+        // 이전 채널의 결과가 새 채널에 잘못 이어져 보이지 않게 한다.
+        setOverlay(`"${channel.name}" 연결 중...`, true);
 
         destroyPlayers();
 
@@ -1213,7 +1270,14 @@
             if (isViaProxy) {
                 setChannelStatus(channel, 'offline');
                 setOverlay('스트림 연결 실패 (오프라인 / CORS 차단)', true);
-                recreateVideoElement(); // 다음 채널 재생을 위해 <video> 엘리먼트를 깨끗한 상태로 교체
+                // 여기서 곧바로 recreateVideoElement()를 호출하지 않는다. hls.js/mpegts.js의
+                // destroy()가 이 이벤트 콜스택 안에서 아직 내부 정리 중일 수 있어 DOM을 바로
+                // 교체하면 충돌할 위험이 있고, setTimeout으로 미루면 사용자가 그 사이 빠르게
+                // 다음 채널을 눌렀을 때 "교체 전(낡은) 비디오 엘리먼트로 새 채널이 재생을
+                // 시작해버리는" 레이스가 생긴다. 대신 플래그만 세워두고, 실제 교체는 다음
+                // playStream() 시작 시점에 그 채널의 어떤 재생 시도보다도 먼저 동기적으로
+                // 수행한다(아래 videoNeedsRecreate 참고) — 순서가 항상 보장된다.
+                videoNeedsRecreate = true;
             } else {
                 retryViaStreamProxy(channel, url, token, isTs);
             }
