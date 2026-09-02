@@ -758,7 +758,7 @@
 
     // 전체 활성 소스 로드
     async function loadAllSources() {
-        setOverlay('전체 M3U 소스를 불러오는 중...', true);
+        setOverlay('IPTV 주소를 갱신중입니다...', true);
         activeSourcesBar.innerHTML = '';
         allChannels = [];
         epgProgrammes = {};
@@ -799,7 +799,13 @@
         // 나타나는 순서 역전 버그가 생겼다. 슬롯 인덱스별로 결과를 저장해두고, 매번 인덱스
         // 순서대로(아직 안 온 슬롯은 건너뛰고) 다시 이어붙이는 방식으로 "도착 순서와 무관하게
         // 항상 슬롯 순서"를 보장한다.
-        let firstChannelAutoplayed = false;
+        //
+        // ⚠️ 첫 화면 자동재생 제거: 예전에는 첫 채널이 도착하는 즉시 자동재생을 시작했는데,
+        // 카테고리탭에 들어가자마자 사용자 동의 없이 외부 스트림 서버로 접속을 시작하는
+        // 셈이라(해당 서버에 접속 정보/IP가 그대로 전달됨) 바람직하지 않다는 지적을 반영해
+        // 자동재생을 없앴다. 대신 소스 목록을 갱신하는 동안에는 "IPTV 주소를 갱신중입니다"
+        // 안내를 계속 보여주고, 로딩이 끝나면(채널이 있든 없든) 사용자가 직접 채널을 눌러야
+        // 재생이 시작되는 "채널을 선택해주세요" 안내로 넘어간다.
         const channelsBySlot = new Array(activeSlots.length).fill(null); // null = 아직 미도착
 
         const rebuildAllChannelsInSlotOrder = () => {
@@ -829,6 +835,8 @@
             }
         };
 
+        const allSlotsSettled = () => channelsBySlot.every(chs => chs !== null);
+
         const onSlotSettled = (idx, channels) => {
             channelsBySlot[idx] = channels; // 도착 순서와 무관하게 항상 슬롯 인덱스 자리에 저장
             rebuildAllChannelsInSlotOrder(); // 매번 슬롯 순서대로 처음부터 다시 이어붙인다
@@ -836,13 +844,14 @@
             rebuildGroupOptions();
             renderFilteredChannels();
 
-            if (allChannels.length > 0) {
-                setOverlay('채널을 선택하세요.', true);
-                if (!firstChannelAutoplayed && !activeChannel) {
-                    firstChannelAutoplayed = true;
-                    // 페이지 로드 직후의 자동재생은 사용자 제스처가 없으므로 음소거 상태로 시작
-                    playStream(allChannels[0], true);
-                }
+            // 아직 응답을 기다리는 소스가 남아있는 동안에는 계속 "갱신중" 안내를 유지하고,
+            // 모든 소스가 다 도착한 뒤에야(자동재생 없이) "채널을 선택해주세요"로 바꾼다 —
+            // 그래야 뒤늦게 도착한 소스의 채널을 사용자가 놓치지 않는다.
+            if (allSlotsSettled()) {
+                setOverlay(
+                    allChannels.length > 0 ? '채널을 선택해주세요.' : '활성화된 소스에서 채널을 찾지 못했습니다.\n[⚙️ 소스 관리]에서 M3U 주소를 확인해주세요.',
+                    true
+                );
             }
         };
 
@@ -853,10 +862,6 @@
         );
 
         await Promise.allSettled(m3uPromises);
-
-        if (allChannels.length === 0) {
-            setOverlay('활성화된 소스에서 채널을 찾지 못했습니다.\n[⚙️ 소스 관리]에서 M3U 주소를 확인해주세요.', true);
-        }
     }
 
     async function loadM3UFile(url, sourceName) {
