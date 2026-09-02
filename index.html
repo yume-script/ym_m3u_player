@@ -83,10 +83,13 @@
 
     <!-- [우측] 사이드바 -->
     <aside class="m3u-sidebar-section">
-        <!-- 툴바: 소스 관리 / 사전 점검 / 새로고침 -->
+        <!-- 툴바: 소스 관리 / 유튜브 검색 / 사전 점검 / 새로고침 -->
         <div class="m3u-toolbar-row">
             <button id="m3uOpenSourceModalBtn" class="m3u-btn m3u-btn-primary" style="flex:1;">
                 <i class="fa-solid fa-layer-group"></i> ⚙️ 소스 관리
+            </button>
+            <button id="m3uOpenYoutubeModalBtn" class="m3u-btn m3u-btn-secondary" title="유튜브 검색해서 채널로 추가">
+                <i class="fa-brands fa-youtube"></i> 유튜브
             </button>
             <button id="m3uHealthCheckBtn" class="m3u-btn m3u-btn-secondary" title="사전 스트림 상태 점검">
                 <i class="fa-solid fa-stethoscope"></i> 상태 점검
@@ -159,6 +162,50 @@
                 <button id="m3uCloseModalBtn" class="m3u-close-btn">&times;</button>
             </div>
             <div id="m3uScheduleList" class="m3u-modal-body"></div>
+        </div>
+    </div>
+
+    <!-- [모달 3] 유튜브 검색 & 체크 저장 모달 -->
+    <div id="m3uYoutubeModal" class="m3u-modal hidden">
+        <div class="m3u-modal-content m3u-source-modal-content">
+            <div class="m3u-modal-header">
+                <h3><i class="fa-brands fa-youtube"></i> 유튜브 검색해서 채널로 추가</h3>
+                <button id="m3uCloseYoutubeModalBtn" class="m3u-close-btn">&times;</button>
+            </div>
+            <div class="m3u-modal-body">
+                <p class="m3u-modal-desc">
+                    검색 결과에서 체크한 영상만 저장됩니다. 유튜브 재생 주소는 서명된 임시 링크라
+                    저장해두지 못하고, 재생할 때마다 서버가 새로 가져옵니다 — 그래서 유튜브 정책
+                    변경 등으로 일부 영상은 재생이 안 될 수 있습니다.
+                </p>
+
+                <div class="m3u-yt-search-row">
+                    <input type="text" id="m3uYoutubeSearchInput" class="m3u-input" placeholder="검색어 입력 (예: 뉴스 라이브)">
+                    <button id="m3uYoutubeSearchBtn" class="m3u-btn m3u-btn-primary">
+                        <i class="fa-solid fa-magnifying-glass"></i> 검색
+                    </button>
+                </div>
+
+                <div class="m3u-yt-columns">
+                    <div class="m3u-yt-column">
+                        <div class="m3u-yt-column-title">검색 결과</div>
+                        <div id="m3uYoutubeSearchResults" class="m3u-yt-list">
+                            <div class="m3u-empty-state">검색어를 입력하고 검색 버튼을 눌러주세요.</div>
+                        </div>
+                    </div>
+                    <div class="m3u-yt-column">
+                        <div class="m3u-yt-column-title">선택됨 (<span id="m3uYoutubeSelectedCount">0</span>)</div>
+                        <div id="m3uYoutubeSelectedList" class="m3u-yt-list">
+                            <div class="m3u-empty-state">선택된 영상이 없습니다.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="m3u-modal-footer">
+                <button id="m3uYoutubeSaveBtn" class="m3u-btn m3u-btn-primary" style="width: 100%;">
+                    <i class="fa-solid fa-check"></i> 선택 목록 저장하고 채널에 반영
+                </button>
+            </div>
         </div>
     </div>
 </div>

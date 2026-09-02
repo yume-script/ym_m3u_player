@@ -21,6 +21,19 @@
     let epgProgrammes = {};
     let favorites = new Set(JSON.parse(localStorage.getItem('m3u_fav_channels') || '[]'));
 
+    // 📺 유튜브 검색/선택 저장 기능 상태
+    // - youtubePicks: 서버(plugins/data/ym_m3u_player/youtube_picks.json)에 저장된, 사용자가
+    //   체크해서 저장한 유튜브 영상 목록 (video_id/title/channel/thumbnail/is_live).
+    // - youtubeChannels: youtubePicks를 채널 목록에 섞어 넣을 수 있는 형태로 변환한 배열
+    //   (buildYoutubeChannel 참고). allChannels 뒤쪽에 항상 이어붙는다.
+    // - youtubeSearchResults: 마지막 검색 결과 (모달이 열려있는 동안만 유효).
+    // - youtubeSelectedMap: 모달에서 체크된 항목들 (video_id -> pick 객체). 모달을 열 때
+    //   기존 youtubePicks로 미리 채워두고, 검색 결과에서 체크/해제하면 여기 반영된다.
+    let youtubePicks = [];
+    let youtubeChannels = [];
+    let youtubeSearchResults = [];
+    let youtubeSelectedMap = new Map();
+
     let channelHealth = JSON.parse(sessionStorage.getItem('m3u_channel_health') || '{}');
     let isHealthChecking = false;
 
@@ -129,6 +142,17 @@
     const saveSourcesBtn = document.getElementById('m3uSaveSourcesBtn');
     const reloadAllBtn = document.getElementById('m3uReloadAllBtn');
 
+    // 유튜브 검색 모달
+    const openYoutubeModalBtn = document.getElementById('m3uOpenYoutubeModalBtn');
+    const closeYoutubeModalBtn = document.getElementById('m3uCloseYoutubeModalBtn');
+    const youtubeModal = document.getElementById('m3uYoutubeModal');
+    const youtubeSearchInput = document.getElementById('m3uYoutubeSearchInput');
+    const youtubeSearchBtn = document.getElementById('m3uYoutubeSearchBtn');
+    const youtubeSearchResultsEl = document.getElementById('m3uYoutubeSearchResults');
+    const youtubeSelectedListEl = document.getElementById('m3uYoutubeSelectedList');
+    const youtubeSelectedCountEl = document.getElementById('m3uYoutubeSelectedCount');
+    const youtubeSaveBtn = document.getElementById('m3uYoutubeSaveBtn');
+
     // Playing Info Elements
     const currentTitleEl = document.getElementById('m3uCurrentChannelTitle');
     const currentGroupEl = document.getElementById('m3uCurrentChannelGroup');
@@ -208,6 +232,10 @@
             const data = await res.json();
             if (data && data.success === false) throw new Error(data.error || 'success:false');
             if (data && data.version) localPluginVersion = String(data.version); // VERSION 파일 값 (get_dashboard_data가 내려줌)
+            if (data && Array.isArray(data.youtube_picks)) {
+                youtubePicks = data.youtube_picks;
+                rebuildYoutubeChannels();
+            }
             if (data && Array.isArray(data.slots) && data.slots.length > 0) {
                 return data.slots;
             }
@@ -297,10 +325,16 @@
     }
 
     function applyAdminUiState() {
-        if (!openSourceModalBtn) return;
-        openSourceModalBtn.disabled = !isAdmin;
-        openSourceModalBtn.title = isAdmin ? '' : '소스 설정 변경은 관리자 계정만 가능합니다.';
-        openSourceModalBtn.classList.toggle('m3u-disabled-hint', !isAdmin);
+        if (openSourceModalBtn) {
+            openSourceModalBtn.disabled = !isAdmin;
+            openSourceModalBtn.title = isAdmin ? '' : '소스 설정 변경은 관리자 계정만 가능합니다.';
+            openSourceModalBtn.classList.toggle('m3u-disabled-hint', !isAdmin);
+        }
+        if (youtubeSaveBtn) {
+            youtubeSaveBtn.disabled = !isAdmin;
+            youtubeSaveBtn.title = isAdmin ? '' : '유튜브 선택 목록 저장은 관리자 계정만 가능합니다.';
+            youtubeSaveBtn.classList.toggle('m3u-disabled-hint', !isAdmin);
+        }
     }
 
     // 방송사 로고/썸네일 등 외부 도메인 이미지를 로컬 캐시 경유로 서빙하는 URL을 만든다.
@@ -442,6 +476,14 @@
         saveSourcesBtn.addEventListener('click', saveSourcesFromModal);
         reloadAllBtn.addEventListener('click', loadAllSources);
         healthCheckBtn.addEventListener('click', startHealthCheckBatch);
+
+        openYoutubeModalBtn.addEventListener('click', openYoutubeModal);
+        closeYoutubeModalBtn.addEventListener('click', closeYoutubeModal);
+        youtubeSearchBtn.addEventListener('click', searchYoutube);
+        youtubeSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); searchYoutube(); }
+        });
+        youtubeSaveBtn.addEventListener('click', saveYoutubePicksFromModal);
 
         searchInput.addEventListener('input', renderFilteredChannels);
         groupSelectEl.addEventListener('change', renderFilteredChannels);
@@ -827,6 +869,28 @@
     }
 
     // 전체 활성 소스 로드
+    // 그룹 필터 <select> 옵션을 allChannels 기준으로 다시 만든다. M3U 슬롯 로딩과 유튜브
+    // 선택 목록 갱신 양쪽에서 공통으로 쓰므로 loadAllSources() 밖의 모듈 스코프 함수로 둔다.
+    function rebuildGroupOptions() {
+        const groups = new Set();
+        allChannels.forEach(c => { if (c.group) groups.add(c.group); });
+        const currentSelection = groupSelectEl.value;
+        groupSelectEl.innerHTML = `
+            <option value="">전체 그룹 (All)</option>
+            <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
+        `;
+        Array.from(groups).sort().forEach(g => {
+            const opt = document.createElement('option');
+            opt.value = g;
+            opt.textContent = g;
+            groupSelectEl.appendChild(opt);
+        });
+        // 다시 그리는 동안 사용자가 골라둔 그룹 필터가 남아있으면 유지한다.
+        if (Array.from(groupSelectEl.options).some(o => o.value === currentSelection)) {
+            groupSelectEl.value = currentSelection;
+        }
+    }
+
     async function loadAllSources() {
         setOverlay('IPTV 주소를 갱신중입니다...', true);
         activeSourcesBar.innerHTML = '';
@@ -836,9 +900,20 @@
         const activeSlots = sourceSlots.filter(s => s.enabled && s.m3u && s.m3u.trim());
 
         if (activeSlots.length === 0) {
-            setOverlay('활성화된 M3U 소스가 없습니다.\n[⚙️ 소스 관리]에서 주소를 등록하고 체크를 켜주세요.', true);
-            channelCountEl.textContent = '0';
-            channelListEl.innerHTML = '<div class="m3u-empty-state">활성화된 소스가 없습니다.</div>';
+            // M3U 소스가 하나도 없어도 저장된 유튜브 채널은 그대로 보여준다.
+            allChannels = allChannels.concat(youtubeChannels);
+            channelCountEl.textContent = allChannels.length;
+            rebuildGroupOptions();
+            renderFilteredChannels();
+            setOverlay(
+                allChannels.length > 0
+                    ? '채널을 선택해주세요.'
+                    : '활성화된 M3U 소스가 없습니다.\n[⚙️ 소스 관리]에서 주소를 등록하고 체크를 켜주세요.',
+                true
+            );
+            if (allChannels.length === 0) {
+                channelListEl.innerHTML = '<div class="m3u-empty-state">활성화된 소스가 없습니다.</div>';
+            }
             return;
         }
 
@@ -868,7 +943,7 @@
         // 2번 iptv-org)이 더 느린 슬롯(예: 1번 개인 서버)보다 먼저 도착해서 화면에 앞서
         // 나타나는 순서 역전 버그가 생겼다. 슬롯 인덱스별로 결과를 저장해두고, 매번 인덱스
         // 순서대로(아직 안 온 슬롯은 건너뛰고) 다시 이어붙이는 방식으로 "도착 순서와 무관하게
-        // 항상 슬롯 순서"를 보장한다.
+        // 항상 슬롯 순서"를 보장한다. 유튜브 채널은 항상 M3U 채널들 뒤에 붙인다.
         //
         // ⚠️ 첫 화면 자동재생 제거: 예전에는 첫 채널이 도착하는 즉시 자동재생을 시작했는데,
         // 카테고리탭에 들어가자마자 사용자 동의 없이 외부 스트림 서버로 접속을 시작하는
@@ -883,26 +958,7 @@
             channelsBySlot.forEach(chs => {
                 if (Array.isArray(chs)) allChannels = allChannels.concat(chs);
             });
-        };
-
-        const rebuildGroupOptions = () => {
-            const groups = new Set();
-            allChannels.forEach(c => { if (c.group) groups.add(c.group); });
-            const currentSelection = groupSelectEl.value;
-            groupSelectEl.innerHTML = `
-                <option value="">전체 그룹 (All)</option>
-                <option value="__FAVORITES__">⭐ 즐겨찾기 채널</option>
-            `;
-            Array.from(groups).sort().forEach(g => {
-                const opt = document.createElement('option');
-                opt.value = g;
-                opt.textContent = g;
-                groupSelectEl.appendChild(opt);
-            });
-            // 다시 그리는 동안 사용자가 골라둔 그룹 필터가 남아있으면 유지한다.
-            if (Array.from(groupSelectEl.options).some(o => o.value === currentSelection)) {
-                groupSelectEl.value = currentSelection;
-            }
+            allChannels = allChannels.concat(youtubeChannels);
         };
 
         const allSlotsSettled = () => channelsBySlot.every(chs => chs !== null);
@@ -934,6 +990,15 @@
         await Promise.allSettled(m3uPromises);
     }
 
+    // M3U를 다시 불러오지 않고, 이미 그려진 채널 목록 뒤에 유튜브 채널만 다시 이어붙여
+    // 즉시 반영한다 (유튜브 선택 목록 저장 직후 호출).
+    function refreshYoutubeChannelsInList() {
+        allChannels = allChannels.filter(c => !c.isYoutube).concat(youtubeChannels);
+        channelCountEl.textContent = allChannels.length;
+        rebuildGroupOptions();
+        renderFilteredChannels();
+    }
+
     async function loadM3UFile(url, sourceName) {
         try {
             const text = await fetchTextWithCorsFallback(url);
@@ -952,6 +1017,240 @@
         } catch (e) {
             console.error(`[M3UPlayer] EPG 로드 실패 (${sourceName}):`, e.message);
             return false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 📺 유튜브 검색 / 체크 저장 / 재생
+    // ------------------------------------------------------------------
+    // 서버(ym_m3u_player.py)와는 기존 소스 저장과 동일하게 POST /api/media/books/0/apply-metadata
+    // (source: PLUGIN_ID)를 재사용한다. 이 엔드포인트의 정식 응답 계약은 {success, message}처럼
+    // message가 단순 문자열이지만, 이 플러그인은 그 message 필드 안에 JSON 문자열을 담아
+    // 구조화된 데이터(검색 결과, 재생 URL)를 주고받는 방식으로 확장해서 쓴다 — save_sources
+    // 액션이 이 엔드포인트를 소스 설정 저장용으로 재활용하는 것과 같은 패턴이다.
+    async function callYoutubeAction(action, extraFields) {
+        const res = await fetch('/api/media/books/0/apply-metadata', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: CONFIG_SCOPE,
+                source: PLUGIN_ID,
+                item_data: Object.assign({ action }, extraFields || {}),
+            }),
+        });
+        const result = await res.json().catch(() => null);
+        if (res.status === 401 || res.status === 403) {
+            throw new Error('권한이 없습니다 (관리자 계정만 유튜브 목록을 저장할 수 있습니다).');
+        }
+        if (!res.ok || !result || result.success === false) {
+            throw new Error((result && result.message) || `HTTP ${res.status}`);
+        }
+        // message 필드에 JSON 문자열이 담겨 온다 (위 설명 참고). 액션에 따라 JSON이 아닐 수도
+        // 있으므로(단순 성공 메시지) 파싱 실패 시 원문 메시지를 그대로 반환한다.
+        try {
+            return JSON.parse(result.message);
+        } catch (e) {
+            return { message: result.message };
+        }
+    }
+
+    // 저장된 pick(video_id/title/channel/thumbnail/is_live)을 채널 목록에 섞을 수 있는
+    // "채널"모양 객체로 변환한다. url은 일부러 비워둔다 — 유튜브 재생 URL은 서명된
+    // 시간제한 링크라 저장해둘 수 없고, 클릭(재생)하는 바로 그 시점에 매번 새로 추출한다
+    // (playYoutubeChannel 참고).
+    function buildYoutubeChannel(pick) {
+        return {
+            id: `yt_${pick.video_id}`,
+            name: pick.title || pick.video_id,
+            group: '📺 유튜브',
+            logo: pick.thumbnail || '',
+            url: '',
+            isYoutube: true,
+            videoId: pick.video_id,
+            channelName: pick.channel || '',
+            isLiveHint: !!pick.is_live,
+        };
+    }
+
+    function rebuildYoutubeChannels() {
+        youtubeChannels = youtubePicks.map(buildYoutubeChannel);
+    }
+
+    // 채널 목록에서 유튜브 채널을 클릭했을 때: 저장해둔 URL이 아니라 그 순간 서버에
+    // yt-dlp로 최신 재생 주소를 새로 뽑아달라고 요청한 뒤, 기존 HLS/MPEG-TS/DIRECT +
+    // 프록시 재시도 파이프라인(attemptPlayUrl)에 그대로 태운다. 라이브 방송이면 보통
+    // .m3u8 HLS 매니페스트라 hls.js가 그대로 처리해준다.
+    async function playYoutubeChannel(channel, token) {
+        try {
+            const data = await callYoutubeAction('resolve_youtube_url', { video_id: channel.videoId });
+            if (token !== playToken) return; // 대기 중 다른 채널로 전환됨
+            if (!data || !data.stream_url) {
+                throw new Error((data && data.message) || '재생 가능한 스트림 주소를 찾지 못했습니다.');
+            }
+            const isTs = detectIsTs(data.stream_url);
+            attemptPlayUrl(channel, data.stream_url, false, token, isTs);
+        } catch (e) {
+            if (token !== playToken) return;
+            setChannelStatus(channel, 'offline');
+            setOverlay(`유튜브 영상 재생 실패: ${e.message}\n(유튜브 보호 정책 변경 등으로 일부 영상은 재생이 안 될 수 있습니다)`, true);
+            videoNeedsRecreate = true; // 다음 채널 재생을 위해 안전하게 정리
+        }
+    }
+
+    // --- 검색 모달 UI ---
+
+    function openYoutubeModal() {
+        // 모달을 열 때마다 기존 저장 목록으로 선택 상태를 초기화한다 (검색은 매번 새로 함).
+        youtubeSelectedMap = new Map(youtubePicks.map(p => [p.video_id, p]));
+        youtubeSearchResults = [];
+        youtubeSearchInput.value = '';
+        youtubeSearchResultsEl.innerHTML = '<div class="m3u-empty-state">검색어를 입력하고 검색 버튼을 눌러주세요.</div>';
+        renderYoutubeSelectedList();
+        youtubeModal.classList.remove('hidden');
+        youtubeSearchInput.focus();
+    }
+
+    function closeYoutubeModal() {
+        youtubeModal.classList.add('hidden');
+    }
+
+    async function searchYoutube() {
+        const query = youtubeSearchInput.value.trim();
+        if (!query) {
+            alert('검색어를 입력해주세요.');
+            return;
+        }
+        youtubeSearchBtn.disabled = true;
+        youtubeSearchBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 검색 중...';
+        youtubeSearchResultsEl.innerHTML = '<div class="m3u-empty-state">검색 중...</div>';
+        try {
+            const data = await callYoutubeAction('search_youtube', { query, limit: 15 });
+            youtubeSearchResults = (data && Array.isArray(data.results)) ? data.results : [];
+            renderYoutubeSearchResults();
+        } catch (e) {
+            youtubeSearchResultsEl.innerHTML = `<div class="m3u-empty-state">검색 실패: ${escapeHtml(e.message)}</div>`;
+        } finally {
+            youtubeSearchBtn.disabled = false;
+            youtubeSearchBtn.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> 검색';
+        }
+    }
+
+    function renderYoutubeThumbUrl(pick) {
+        return pick.thumbnail
+            ? logoCacheUrl(pick.thumbnail)
+            : (pick.video_id ? `https://i.ytimg.com/vi/${pick.video_id}/hqdefault.jpg` : '');
+    }
+
+    function renderYoutubeSearchResults() {
+        youtubeSearchResultsEl.innerHTML = '';
+        if (youtubeSearchResults.length === 0) {
+            youtubeSearchResultsEl.innerHTML = '<div class="m3u-empty-state">검색 결과가 없습니다.</div>';
+            return;
+        }
+        youtubeSearchResults.forEach(pick => {
+            const row = document.createElement('label');
+            row.className = 'm3u-yt-row';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = youtubeSelectedMap.has(pick.video_id);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) youtubeSelectedMap.set(pick.video_id, pick);
+                else youtubeSelectedMap.delete(pick.video_id);
+                renderYoutubeSelectedList();
+            });
+
+            const thumb = document.createElement('img');
+            thumb.className = 'm3u-yt-thumb';
+            thumb.loading = 'lazy';
+            thumb.src = renderYoutubeThumbUrl(pick);
+            thumb.onerror = () => { thumb.style.visibility = 'hidden'; };
+
+            const info = document.createElement('div');
+            info.className = 'm3u-yt-info';
+            const title = document.createElement('div');
+            title.className = 'm3u-yt-title';
+            title.textContent = pick.title || '(제목 없음)';
+            const meta = document.createElement('div');
+            meta.className = 'm3u-yt-meta';
+            meta.textContent = (pick.channel || '') + (pick.is_live ? ' · 🔴 LIVE' : '');
+            info.appendChild(title);
+            info.appendChild(meta);
+
+            row.appendChild(checkbox);
+            row.appendChild(thumb);
+            row.appendChild(info);
+            youtubeSearchResultsEl.appendChild(row);
+        });
+    }
+
+    function renderYoutubeSelectedList() {
+        const picks = Array.from(youtubeSelectedMap.values());
+        youtubeSelectedCountEl.textContent = picks.length;
+        youtubeSelectedListEl.innerHTML = '';
+        if (picks.length === 0) {
+            youtubeSelectedListEl.innerHTML = '<div class="m3u-empty-state">선택된 영상이 없습니다.</div>';
+            return;
+        }
+        picks.forEach(pick => {
+            const row = document.createElement('div');
+            row.className = 'm3u-yt-row';
+
+            const thumb = document.createElement('img');
+            thumb.className = 'm3u-yt-thumb';
+            thumb.loading = 'lazy';
+            thumb.src = renderYoutubeThumbUrl(pick);
+            thumb.onerror = () => { thumb.style.visibility = 'hidden'; };
+
+            const info = document.createElement('div');
+            info.className = 'm3u-yt-info';
+            const title = document.createElement('div');
+            title.className = 'm3u-yt-title';
+            title.textContent = pick.title || '(제목 없음)';
+            info.appendChild(title);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'm3u-icon-btn';
+            removeBtn.title = '선택 해제';
+            removeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+            removeBtn.addEventListener('click', () => {
+                youtubeSelectedMap.delete(pick.video_id);
+                renderYoutubeSelectedList();
+                renderYoutubeSearchResults(); // 검색 결과 쪽 체크 표시도 함께 갱신
+            });
+
+            row.appendChild(thumb);
+            row.appendChild(info);
+            row.appendChild(removeBtn);
+            youtubeSelectedListEl.appendChild(row);
+        });
+    }
+
+    async function saveYoutubePicksFromModal() {
+        if (!isAdmin) {
+            alert('유튜브 선택 목록 저장은 관리자 계정만 가능합니다.');
+            return;
+        }
+        const picks = Array.from(youtubeSelectedMap.values()).map(p => ({
+            video_id: p.video_id,
+            title: p.title || '',
+            channel: p.channel || '',
+            thumbnail: p.thumbnail || '',
+            is_live: !!p.is_live,
+        }));
+
+        youtubeSaveBtn.disabled = true;
+        try {
+            await callYoutubeAction('save_youtube_picks', { picks });
+            youtubePicks = picks;
+            rebuildYoutubeChannels();
+            refreshYoutubeChannelsInList();
+            closeYoutubeModal();
+        } catch (e) {
+            alert(`저장에 실패했습니다: ${e.message}`);
+        } finally {
+            youtubeSaveBtn.disabled = false;
         }
     }
 
@@ -1084,6 +1383,11 @@
     // (직접 fetch만으로는 실제로는 재생 가능한 채널도 CORS 미허용 때문에 오프라인으로
     // 오탐될 수 있어서, 실제 재생 경로와 동일한 프록시 경유 확인을 추가한다.)
     async function checkChannelHealth(ch) {
+        // 유튜브 채널은 실제 재생 URL을 재생 시점에 매번 새로 추출하므로(서명 URL이라 저장이
+        // 불가능) 목록 단계에서는 확인할 URL 자체가 없다. 상태 점검에서는 건너뛰고 항상
+        // "미확인"으로 둔다 (재생을 시도해봐야 실제 성공 여부를 알 수 있다).
+        if (ch.isYoutube) return 'unknown';
+
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 2500);
@@ -1361,6 +1665,14 @@
         videoEl.load();
 
         videoEl.muted = !!isAutoplay;
+
+        // 📺 유튜브 채널: M3U에 적힌 고정 URL이 없다 — 서명된 재생 URL을 이 순간에 새로
+        // 추출해야 하므로 별도 경로(playYoutubeChannel)로 처리하고 여기서 끝낸다.
+        if (channel.isYoutube) {
+            playYoutubeChannel(channel, myToken);
+            renderFilteredChannels();
+            return;
+        }
 
         const streamUrl = channel.url.trim();
         // 포맷 판별(TS 여부)은 항상 "원본" URL 기준으로 딱 한 번만 계산해서 프록시

@@ -44,6 +44,25 @@ plugin_board / scan_scheduler와 동일하게
     POST /api/media/books/0/apply-metadata
     body: {"type": db_type, "source": plugin_id, "item_data": {...}}
 로 apply(db_type, book_id, item_data)를 호출해 처리한다 (book_id=0은 더미).
+item_data.action으로 여러 커스텀 기능을 구분한다: save_sources(소스 저장),
+search_youtube(유튜브 검색), resolve_youtube_url(재생 URL 추출),
+save_youtube_picks(유튜브 선택 목록 저장). 아래 "유튜브 검색/저장/재생" 섹션 참고.
+
+📺 유튜브 검색 / 체크 저장 / 재생 (yt-dlp 기반)
+카테고리탭에서 유튜브를 키워드로 검색하고, 체크한 영상만 골라
+plugins/data/ym_m3u_player/youtube_picks.json에 저장해두는 기능이다.
+검색은 yt-dlp의 `ytsearchN:키워드` 문법을 쓰므로 유튜브 Data API 키가
+필요 없다. 단, 유튜브의 실제 재생 주소는 시간 제한이 있는 서명된 링크라
+저장 시점의 값을 그대로 재사용할 수 없다 — 그래서 저장 파일에는
+video_id/title/channel/thumbnail/is_live 같은 메타데이터만 담고, 재생
+버튼을 누르는 바로 그 순간에 서버가 yt-dlp로 최신 재생 주소를 새로
+추출해서 넘겨준다(resolve_youtube_url 액션). 이 방식의 한계:
+- yt-dlp는 유튜브가 서명/보호 로직을 바꿀 때마다 업데이트가 필요한
+  비공식 추출 도구라, 특정 시점에 일부 영상(특히 연령제한/일부 라이브)의
+  재생이 실패할 수 있다.
+- requirements.txt로 yt-dlp가 이 플러그인 전용 libs/ 폴더에 자동 설치되며,
+  설치 전/실패 시에도 이 기능만 에러 메시지로 안내되고 M3U 재생 등 다른
+  기능에는 영향이 없다.
 """
 
 import json
@@ -83,6 +102,7 @@ def _resolve_app_root():
 
 DATA_DIR = os.path.join(_resolve_app_root(), "plugins", "data", _PLUGIN_ID_FOR_PATH)
 CONFIG_FILE = os.path.join(DATA_DIR, "sources.json")
+YOUTUBE_PICKS_FILE = os.path.join(DATA_DIR, "youtube_picks.json")
 
 # 플러그인 코드 자신의 버전 파일 (plugins/data/의 사용자 설정과는 별개 — 코드 위치 옆에 있는
 # VERSION 파일). 카테고리탭 화면에서 "현재 버전 vs GitHub 최신 버전" 배지를 보여줄 때
@@ -170,6 +190,145 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
 
     def search(self, db_type, query):
         return {"success": True, "items": []}
+
+    # ------------------------------------------------------------------
+    # 📺 유튜브 검색 / 체크 저장 / 재생용 URL 추출 (yt-dlp)
+    # ------------------------------------------------------------------
+    # yt-dlp는 requirements.txt로 이 플러그인 전용 libs/ 폴더에 격리 설치된다
+    # (guide_plugins.md "플러그인 캐시"/패키지 격리 절 참고). 여기서는 지연 import로
+    # 불러온다 — 설치 전이거나 실패해도 플러그인의 다른 기능(M3U 재생 등)은
+    # 영향받지 않고, 이 기능을 실제로 쓸 때만 에러 메시지로 안내한다.
+    @staticmethod
+    def _import_yt_dlp():
+        try:
+            import yt_dlp  # noqa: WPS433 (의도적 지연 import)
+            return yt_dlp, None
+        except ImportError:
+            return None, (
+                "yt-dlp가 설치되어 있지 않습니다. 관리자에게 플러그인 재설치/서버 재시작을 "
+                "요청해주세요 (requirements.txt를 통해 자동 설치되어야 합니다)."
+            )
+
+    def _run_ytdlp_search(self, query, limit=15):
+        """ytsearchN:검색어 표현으로 유튜브 검색 결과 메타데이터만 빠르게 가져온다
+        (API 키 불필요). extract_flat 옵션으로 각 영상의 실제 스트림까지는 파고들지
+        않아 검색 자체는 비교적 빠르다."""
+        yt_dlp, err = self._import_yt_dlp()
+        if err:
+            return None, err
+
+        limit = max(1, min(int(limit or 15), 30))  # 과도한 검색량 방지
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": "in_playlist",
+            "skip_download": True,
+            "socket_timeout": 10,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        except Exception as e:  # yt-dlp는 다양한 자체 예외를 던지므로 광범위하게 처리
+            return None, f"유튜브 검색 실패: {e}"
+
+        entries = (info or {}).get("entries") or []
+        results = []
+        for entry in entries:
+            if not entry:
+                continue
+            video_id = entry.get("id")
+            results.append({
+                "video_id": video_id,
+                "title": entry.get("title") or "(제목 없음)",
+                "channel": entry.get("uploader") or entry.get("channel") or "",
+                "thumbnail": entry.get("thumbnail")
+                    or (f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else ""),
+                "is_live": bool(entry.get("is_live")),
+                "duration": entry.get("duration"),
+            })
+        return results, None
+
+    def _run_ytdlp_resolve(self, video_id):
+        """실제 재생 시점에 호출된다. 유튜브 재생 URL은 시간 제한이 있는 서명된
+        링크라 저장해둘 수 없으므로, 클릭할 때마다 매번 새로 추출한다. 가능하면
+        hls.js가 바로 처리할 수 있는 m3u8(HLS) 포맷을 우선한다(주로 라이브 방송)."""
+        yt_dlp, err = self._import_yt_dlp()
+        if err:
+            return None, err
+
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "socket_timeout": 10,
+            "format": "best[protocol*=m3u8]/best",
+        }
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            return None, f"영상 정보를 가져오지 못했습니다: {e}"
+
+        if not info:
+            return None, "영상 정보를 가져오지 못했습니다."
+
+        stream_url = info.get("url")
+        protocol = info.get("protocol") or ""
+        if not stream_url or "m3u8" not in protocol:
+            # 최상위 선택 결과가 m3u8이 아니면 formats 목록에서 직접 찾는다.
+            for f in (info.get("formats") or []):
+                if "m3u8" in (f.get("protocol") or "") and f.get("url"):
+                    stream_url = f["url"]
+                    break
+
+        if not stream_url:
+            return None, "재생 가능한 스트림 주소를 찾지 못했습니다 (연령제한/비공개 영상이거나 유튜브 정책 변경일 수 있습니다)."
+
+        return {
+            "stream_url": stream_url,
+            "is_live": bool(info.get("is_live")),
+            "title": info.get("title") or "",
+        }, None
+
+    # ------------------------------------------------------------------
+    # 유튜브 선택 목록 파일 저장소 (./plugins/data/ym_m3u_player/youtube_picks.json)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_youtube_picks():
+        try:
+            with open(YOUTUBE_PICKS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return []
+
+    @staticmethod
+    def _save_youtube_picks(picks):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = YOUTUBE_PICKS_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(picks, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, YOUTUBE_PICKS_FILE)
+
+    @staticmethod
+    def _sanitize_youtube_picks(raw_picks):
+        """프런트에서 받은 체크 목록을 신뢰하지 않고 필요한 필드만 뽑아 정제한다."""
+        picks = []
+        for p in raw_picks or []:
+            if not isinstance(p, dict):
+                continue
+            video_id = str(p.get("video_id") or "").strip()
+            if not video_id:
+                continue
+            picks.append({
+                "video_id": video_id,
+                "title": str(p.get("title") or ""),
+                "channel": str(p.get("channel") or ""),
+                "thumbnail": str(p.get("thumbnail") or ""),
+                "is_live": bool(p.get("is_live")),
+            })
+        return picks
 
     # ------------------------------------------------------------------
     # 설정 <-> slots 배열 변환 헬퍼
@@ -265,29 +424,70 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         # script.js는 여전히 커스텀 필드인 slots를 사용한다.
         # version: 카테고리탭이 GitHub 저장소의 VERSION과 비교해 업데이트 필요 여부를
         # 배지로 보여주는 데 사용한다 (파일을 못 읽으면 None — 프런트가 "확인 불가"로 처리).
+        # youtube_picks: 사용자가 체크해서 저장해둔 유튜브 영상 목록 (video_id/title/
+        # channel/thumbnail/is_live). 실제 재생 URL은 여기 담지 않는다 — 서명된 임시
+        # 링크라 저장해봐야 곧 만료되므로, 재생 시점마다 resolve_youtube_url 액션으로
+        # 새로 추출한다.
         config = self._load_config_with_db_seed(db_type)
         return {
             "success": True,
             "slots": self._slots_from_config(config),
+            "youtube_picks": self._load_youtube_picks(),
             "version": _read_local_version(),
             "items": [],
         }
 
     # ------------------------------------------------------------------
-    # 카테고리탭 "소스 관리" 모달 저장 (POST .../books/0/apply-metadata)
+    # 카테고리탭 "소스 관리" 모달 저장 / 유튜브 검색·저장·재생 URL 추출
+    # (POST .../books/0/apply-metadata) — action 필드로 여러 커스텀 기능을 구분한다.
     # ------------------------------------------------------------------
     def apply(self, db_type, book_id, item_data):
-        if not isinstance(item_data, dict) or item_data.get("action") != "save_sources":
+        if not isinstance(item_data, dict):
             return False, "카테고리 뷰 전용 플레이어 플러그인입니다."
 
-        slots = item_data.get("slots")
-        if not isinstance(slots, list) or not slots:
-            return False, "저장할 소스 정보가 없습니다."
+        action = item_data.get("action")
 
-        config = self._config_from_slots(slots)
-        try:
-            self._save_config_to_file(config)
-        except OSError as e:
-            return False, f"설정 파일 저장 실패: {e}"
+        if action == "save_sources":
+            slots = item_data.get("slots")
+            if not isinstance(slots, list) or not slots:
+                return False, "저장할 소스 정보가 없습니다."
 
-        return True, "M3U 소스 설정이 저장되었습니다. (plugins/data/ym_m3u_player/sources.json)"
+            config = self._config_from_slots(slots)
+            try:
+                self._save_config_to_file(config)
+            except OSError as e:
+                return False, f"설정 파일 저장 실패: {e}"
+
+            return True, "M3U 소스 설정이 저장되었습니다. (plugins/data/ym_m3u_player/sources.json)"
+
+        if action == "search_youtube":
+            query = str(item_data.get("query") or "").strip()
+            if not query:
+                return False, "검색어를 입력해주세요."
+            results, err = self._run_ytdlp_search(query, limit=item_data.get("limit"))
+            if err:
+                return False, err
+            # apply()의 표준 반환은 (bool, 문자열 메시지)뿐이라 구조화된 검색 결과를
+            # 돌려줄 자리가 없다 — save_sources 액션과 마찬가지로 이 엔드포인트를
+            # 커스텀 용도로 재활용하는 것이므로, message 필드에 JSON 문자열을 담아
+            # 프런트가 JSON.parse해서 쓰도록 한다.
+            return True, json.dumps({"results": results}, ensure_ascii=False)
+
+        if action == "resolve_youtube_url":
+            video_id = str(item_data.get("video_id") or "").strip()
+            if not video_id:
+                return False, "video_id가 없습니다."
+            data, err = self._run_ytdlp_resolve(video_id)
+            if err:
+                return False, err
+            return True, json.dumps(data, ensure_ascii=False)
+
+        if action == "save_youtube_picks":
+            picks = self._sanitize_youtube_picks(item_data.get("picks"))
+            try:
+                self._save_youtube_picks(picks)
+            except OSError as e:
+                return False, f"저장 실패: {e}"
+            return True, f"유튜브 선택 목록 {len(picks)}건이 저장되었습니다."
+
+        return False, "카테고리 뷰 전용 플레이어 플러그인입니다."

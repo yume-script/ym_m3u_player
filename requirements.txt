@@ -1,0 +1,5 @@
+# yt-dlp: 유튜브 검색(ytsearchN:) 및 재생 URL 추출용.
+# guide_plugins.md에 따라 이 파일에 적힌 패키지는 이 플러그인 전용 libs/ 폴더에
+# 격리 설치되며, 북오아시스 코어의 주요 라이브러리(Flask, PyMuPDF, Pillow 등)
+# 버전을 건드리지 않는다.
+yt-dlp>=2024.1.0
