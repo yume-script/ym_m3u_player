@@ -774,7 +774,8 @@
             }
             const result = await res.json().catch(() => null);
             if (!res.ok || (result && result.success === false)) {
-                throw new Error((result && result.message) || `HTTP ${res.status}`);
+                console.error(`[M3UPlayer] 소스 저장 실패 (status=${res.status}):`, result);
+                throw new Error((result && (result.error || result.message)) || `HTTP ${res.status}`);
             }
             sourceModal.classList.add('hidden');
             loadAllSources();
@@ -1043,7 +1044,13 @@
             throw new Error('권한이 없습니다 (관리자 계정만 유튜브 목록을 저장할 수 있습니다).');
         }
         if (!res.ok || !result || result.success === false) {
-            throw new Error((result && result.message) || `HTTP ${res.status}`);
+            // ⚠️ 버그 수정: 코어의 표준 에러 응답 규격은 {"success": false, "error": "..."}로
+            // error 키를 쓰는데(guide_plugins.md/API 명세 참고), 여기서는 message 필드만
+            // 확인하고 있어서 실제 실패 사유가 항상 무시되고 "HTTP 400" 같은 의미 없는
+            // 문구만 화면에 떴었다. error/message 둘 다 확인하고, 콘솔에도 응답 전체를
+            // 남겨서 다음부터는 진짜 원인을 바로 확인할 수 있게 한다.
+            console.error(`[M3UPlayer] apply-metadata 실패 (action=${action}, status=${res.status}):`, result);
+            throw new Error((result && (result.error || result.message)) || `HTTP ${res.status}`);
         }
         // message 필드에 JSON 문자열이 담겨 온다 (위 설명 참고). 액션에 따라 JSON이 아닐 수도
         // 있으므로(단순 성공 메시지) 파싱 실패 시 원문 메시지를 그대로 반환한다.
