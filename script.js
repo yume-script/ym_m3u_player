@@ -116,6 +116,8 @@
     const searchInput = document.getElementById('m3uSearchInput');
     const epgStatusEl = document.getElementById('m3uEpgStatus');
     const activeSourcesBar = document.getElementById('m3uActiveSourcesBar');
+    const versionBadgeEl = document.getElementById('m3uVersionBadge');
+    let localPluginVersion = null; // get_dashboard_data()가 내려주는 VERSION 파일 값 (loadSourceSlotsFromServer에서 채워짐)
     const onlyOnlineToggle = document.getElementById('m3uOnlyOnlineToggle');
     const healthCheckBtn = document.getElementById('m3uHealthCheckBtn');
 
@@ -192,6 +194,10 @@
 
         // 전체 소스 로드
         loadAllSources();
+
+        // 버전 배지는 소스 로딩과 무관하게 병렬로 확인한다 (GitHub 조회가 느려도 채널
+        // 목록 표시를 막지 않는다).
+        checkPluginVersionBadge();
     }
 
     // 관리자 설정 화면(config_schema)과 동일한 저장소를 GET /api/media/dashboard/widgets/{id}/data 로 조회
@@ -201,6 +207,7 @@
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             if (data && data.success === false) throw new Error(data.error || 'success:false');
+            if (data && data.version) localPluginVersion = String(data.version); // VERSION 파일 값 (get_dashboard_data가 내려줌)
             if (data && Array.isArray(data.slots) && data.slots.length > 0) {
                 return data.slots;
             }
@@ -208,6 +215,69 @@
         } catch (e) {
             console.warn('[M3UPlayer] 서버 설정 조회 실패, 로컬 백업값을 사용합니다:', e.message);
             return null;
+        }
+    }
+
+    // 🔢 버전 배지: VERSION 파일의 현재 설치 버전과 GitHub 저장소(yume-script/ym_m3u_player)의
+    // 최신 VERSION을 비교해서 업데이트 필요 여부를 알려준다. 관리자 환경설정 화면의 정식
+    // "샘플 업데이트" 기능(update_manifest)과는 별개로, 카테고리탭에서 한눈에 보이는 가벼운
+    // 안내용 배지다 — 실제 자동 업데이트를 수행하지는 않고, 저장소 링크를 열어줄 뿐이다.
+    const GITHUB_REPO_URL = 'https://github.com/yume-script/ym_m3u_player';
+    const GITHUB_VERSION_RAW_URL = 'https://raw.githubusercontent.com/yume-script/ym_m3u_player/main/VERSION';
+
+    // "1.3.2" 같은 점(.)으로 구분된 버전 문자열을 부분별 숫자로 비교한다.
+    // a > b면 양수, a < b면 음수, 같으면 0. "1.9"와 "1.10"처럼 문자열 비교로는 틀리는
+    // 케이스(사전식 비교에서 "1.10" < "1.9")를 정확히 처리하기 위해 숫자 단위로 쪼개서 비교한다.
+    function compareVersions(a, b) {
+        const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+        const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i++) {
+            const diff = (pa[i] || 0) - (pb[i] || 0);
+            if (diff !== 0) return diff > 0 ? 1 : -1;
+        }
+        return 0;
+    }
+
+    async function checkPluginVersionBadge() {
+        if (!versionBadgeEl) return;
+
+        if (!localPluginVersion) {
+            versionBadgeEl.textContent = '버전 정보 없음';
+            versionBadgeEl.title = 'VERSION 파일을 읽지 못했습니다.';
+            return;
+        }
+
+        // 우선 로컬 버전만이라도 즉시 표시해둔다 — GitHub 조회는 실패하거나 느릴 수 있다.
+        versionBadgeEl.textContent = `v${localPluginVersion}`;
+        versionBadgeEl.title = 'GitHub 최신 버전 확인 중...';
+
+        let remoteVersion = null;
+        try {
+            // GitHub Raw는 공개 저장소 파일에 대해 CORS를 허용하므로 보통 직접 fetch로
+            // 충분하지만, 혹시 막히는 환경을 위해 기존 CORS 폴백 유틸을 그대로 재사용한다.
+            const text = await fetchTextWithCorsFallback(GITHUB_VERSION_RAW_URL);
+            const data = JSON.parse(text);
+            remoteVersion = String(data['plugin version'] || '').trim() || null;
+        } catch (e) {
+            console.warn('[M3UPlayer] GitHub 버전 확인 실패:', e.message);
+        }
+
+        if (!remoteVersion) {
+            versionBadgeEl.title = 'GitHub 최신 버전을 확인하지 못했습니다 (네트워크 오류 등).';
+            return;
+        }
+
+        if (compareVersions(remoteVersion, localPluginVersion) > 0) {
+            versionBadgeEl.textContent = `v${localPluginVersion} → v${remoteVersion} 업데이트 필요`;
+            versionBadgeEl.title = `GitHub에 새 버전(v${remoteVersion})이 있습니다. 클릭하면 저장소를 엽니다.`;
+            versionBadgeEl.classList.add('is-outdated');
+            versionBadgeEl.onclick = () => window.open(GITHUB_REPO_URL, '_blank', 'noopener');
+        } else {
+            versionBadgeEl.textContent = `v${localPluginVersion} (최신)`;
+            versionBadgeEl.title = '최신 버전입니다.';
+            versionBadgeEl.classList.remove('is-outdated');
+            versionBadgeEl.onclick = null;
         }
     }
 

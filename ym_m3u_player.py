@@ -84,6 +84,24 @@ def _resolve_app_root():
 DATA_DIR = os.path.join(_resolve_app_root(), "plugins", "data", _PLUGIN_ID_FOR_PATH)
 CONFIG_FILE = os.path.join(DATA_DIR, "sources.json")
 
+# 플러그인 코드 자신의 버전 파일 (plugins/data/의 사용자 설정과는 별개 — 코드 위치 옆에 있는
+# VERSION 파일). 카테고리탭 화면에서 "현재 버전 vs GitHub 최신 버전" 배지를 보여줄 때
+# get_dashboard_data()가 이 값을 함께 내려준다.
+_PLUGIN_CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION_FILE = os.path.join(_PLUGIN_CODE_DIR, "VERSION")
+
+
+def _read_local_version():
+    """VERSION 파일에서 "plugin version" 값을 읽는다. 파일이 없거나 형식이 깨졌으면
+    프런트가 안전하게 처리할 수 있도록 None을 반환한다(예외를 던지지 않는다)."""
+    try:
+        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        version = str(data.get("plugin version") or "").strip()
+        return version or None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+
 # 최초 설치 직후, sources.json이 아직 없을 때 관리자 설정 화면(config_schema)의
 # 값을 시드로 읽어오기 위한 DB 조회 스코프. 이 플러그인 설정은 라이브러리
 # 스코프와 무관한 전역 값이므로 항상 "general" 하나로 고정한다.
@@ -245,10 +263,13 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         # 형태를 기본으로 하므로, 향후 다른 코어 화면이 이 엔드포인트를 공통 방식으로
         # 다루더라도 깨지지 않도록 success/items를 함께 채워준다. 이 플러그인 자신의
         # script.js는 여전히 커스텀 필드인 slots를 사용한다.
+        # version: 카테고리탭이 GitHub 저장소의 VERSION과 비교해 업데이트 필요 여부를
+        # 배지로 보여주는 데 사용한다 (파일을 못 읽으면 None — 프런트가 "확인 불가"로 처리).
         config = self._load_config_with_db_seed(db_type)
         return {
             "success": True,
             "slots": self._slots_from_config(config),
+            "version": _read_local_version(),
             "items": [],
         }
 
