@@ -209,6 +209,53 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
                 "요청해주세요 (requirements.txt를 통해 자동 설치되어야 합니다)."
             )
 
+    # 2025년 말부터 yt-dlp는 유튜브의 'web' 클라이언트 기준으로는 서명 해독을 위해
+    # 별도 JavaScript 런타임(Deno 등)이 있어야 완전히 동작하도록 바뀌었다
+    # (https://github.com/yt-dlp/yt-dlp/wiki/EJS). 서버에 그런 런타임을 설치해달라고
+    # 요구하면 배포 난이도가 크게 오르므로, JS 런타임이 필요 없는 다른 플레이어
+    # 클라이언트(android/ios/tv 등)를 우선 시도하고, 그래도 실패하면 기본값으로
+    # 마지막에 한 번 더 시도하는 순서로 완화한다. 유튜브가 특정 클라이언트를 막으면
+    # (흔한 일이다) 다음 후보로 자동으로 넘어간다.
+    _YTDLP_CLIENT_CANDIDATES = (
+        ["android"],
+        ["ios"],
+        ["tv"],
+        None,  # yt-dlp 기본 클라이언트 조합 (마지막 폴백)
+    )
+
+    def _run_ytdlp_with_client_fallback(self, run_once):
+        """run_once(extra_ydl_opts) -> 결과를 반환하는 콜백을 여러 player_client
+        후보로 순차 시도한다. 첫 성공을 반환하고, 전부 실패하면 마지막 에러를
+        사람이 읽을 수 있는 한국어 안내로 감싸서 반환한다."""
+        last_error = None
+        for client in self._YTDLP_CLIENT_CANDIDATES:
+            extra_opts = {"extractor_args": {"youtube": {"player_client": client}}} if client else {}
+            try:
+                return run_once(extra_opts), None
+            except Exception as e:  # yt-dlp는 다양한 자체 예외를 던지므로 광범위하게 처리
+                last_error = e
+                continue
+
+        msg = str(last_error) if last_error else "알 수 없는 오류"
+        # 흔한 실패 유형은 원인을 짚어주는 한국어 안내로 바꿔서 보여준다. 그 외에는
+        # yt-dlp 원본 에러를 그대로 노출한다(디버깅에 필요할 수 있어서).
+        lowered = msg.lower()
+        if "expecting value" in lowered or "failed to parse json" in lowered:
+            return None, (
+                "유튜브 응답을 해석하지 못했습니다. 서버의 yt-dlp가 오래됐거나(관리자에게 "
+                "최신 버전으로 업데이트 요청), 유튜브 쪽에서 일시적으로 접근을 막았을 수 "
+                "있습니다. 잠시 후 다시 시도해보세요."
+            )
+        if "no supported javascript runtime" in lowered or "js runtime" in lowered:
+            return None, (
+                "이 서버에 유튜브 처리에 필요한 JavaScript 런타임(Deno 등)이 없습니다. "
+                "관리자에게 https://github.com/yt-dlp/yt-dlp/wiki/EJS 참고해 Deno 설치를 "
+                "요청해주세요."
+            )
+        if "sign in to confirm" in lowered or "not a bot" in lowered:
+            return None, "유튜브가 봇 확인을 요구하고 있어 이 서버에서는 추출이 막혔습니다."
+        return None, f"유튜브 처리 실패: {msg}"
+
     def _run_ytdlp_search(self, query, limit=15):
         """ytsearchN:검색어 표현으로 유튜브 검색 결과 메타데이터만 빠르게 가져온다
         (API 키 불필요). extract_flat 옵션으로 각 영상의 실제 스트림까지는 파고들지
@@ -218,18 +265,22 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
             return None, err
 
         limit = max(1, min(int(limit or 15), 30))  # 과도한 검색량 방지
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": "in_playlist",
-            "skip_download": True,
-            "socket_timeout": 10,
-        }
-        try:
+
+        def run_once(extra_opts):
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": "in_playlist",
+                "skip_download": True,
+                "socket_timeout": 10,
+            }
+            ydl_opts.update(extra_opts)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-        except Exception as e:  # yt-dlp는 다양한 자체 예외를 던지므로 광범위하게 처리
-            return None, f"유튜브 검색 실패: {e}"
+                return ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+
+        info, err = self._run_ytdlp_with_client_fallback(run_once)
+        if err:
+            return None, err
 
         entries = (info or {}).get("entries") or []
         results = []
@@ -256,19 +307,23 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         if err:
             return None, err
 
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "socket_timeout": 10,
-            "format": "best[protocol*=m3u8]/best",
-        }
         url = f"https://www.youtube.com/watch?v={video_id}"
-        try:
+
+        def run_once(extra_opts):
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "socket_timeout": 10,
+                "format": "best[protocol*=m3u8]/best",
+            }
+            ydl_opts.update(extra_opts)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            return None, f"영상 정보를 가져오지 못했습니다: {e}"
+                return ydl.extract_info(url, download=False)
+
+        info, err = self._run_ytdlp_with_client_fallback(run_once)
+        if err:
+            return None, err
 
         if not info:
             return None, "영상 정보를 가져오지 못했습니다."

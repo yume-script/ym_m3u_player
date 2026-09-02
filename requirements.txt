@@ -2,4 +2,9 @@
 # guide_plugins.md에 따라 이 파일에 적힌 패키지는 이 플러그인 전용 libs/ 폴더에
 # 격리 설치되며, 북오아시스 코어의 주요 라이브러리(Flask, PyMuPDF, Pillow 등)
 # 버전을 건드리지 않는다.
-yt-dlp>=2024.1.0
+#
+# 유튜브는 내부 API를 자주 바꾸고, yt-dlp는 그때그때 대응 패치를 낸다 — 버전이
+# 오래되면 "Failed to parse JSON" 같은 에러로 검색/재생이 실패할 수 있으므로
+# 최소 버전을 최대한 최근 것으로 지정한다(이 파일을 검토한 시점 기준 최신 안정
+# 릴리즈: https://github.com/yt-dlp/yt-dlp/releases 에서 확인 가능).
+yt-dlp>=2026.8.19
