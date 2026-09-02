@@ -196,6 +196,13 @@
         detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
         ensureExternalLibsLoaded(); // hls.js/mpegts.js를 최대한 일찍 미리 로드 시작 (아래 M3U/EPG 로딩과 병렬)
 
+        // 🚧 유튜브 검색 기능은 현재 서버 환경(yt-dlp/유튜브 쪽 이슈)에서 검색이 안 되는
+        // 상태라 임시로 버튼을 막아둔다. 기능 코드 자체는 그대로 두었으니, 문제가 해결되면
+        // 이 3줄만 지우면 다시 켤 수 있다.
+        openYoutubeModalBtn.disabled = true;
+        openYoutubeModalBtn.title = '유튜브 검색은 현재 일시적으로 사용할 수 없습니다.';
+        openYoutubeModalBtn.classList.add('m3u-disabled-hint');
+
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
 
@@ -804,7 +811,12 @@
         }
     }
 
-    const TEXT_FETCH_TIMEOUT_MS = 8000; // M3U/EPG 텍스트 조회 1회 시도당 최대 대기 시간
+    const TEXT_FETCH_TIMEOUT_MS = 8000; // M3U 텍스트 조회 1회 시도당 최대 대기 시간
+    // ⚠️ 버그: EPG(XMLTV) 파일은 보통 여러 채널 x 여러 날짜의 편성표를 한꺼번에 담고 있어서
+    // M3U 재생목록보다 훨씬 크고(수 MB~수십 MB) 응답도 오래 걸릴 수 있는데, 위 8초 타임아웃이
+    // EPG 조회에도 그대로 적용되고 있어서 "화면이 늦게 뜨는" 문제를 고치려다 EPG가 중간에
+    // 잘려서 실패하는 새 문제를 만들었다. EPG는 별도로 더 넉넉한 타임아웃을 쓴다.
+    const EPG_FETCH_TIMEOUT_MS = 30000;
 
     // 📄 텍스트 파일(M3U/EPG) 조회: 직접 fetch를 우선 시도하고, 실패하면
     // 코어가 제공하는 window.BookOasisPlugin.getProxyUrl()(/api/webview/proxy 경유)로 재시도한다.
@@ -823,12 +835,13 @@
     // 시도한다. 화이트리스트 차단(403)/응답 초과(413) 등 메서드와 무관한 오류는 POST로 바꿔도
     // 해결되지 않으므로 그 경우엔 즉시 원래 에러로 실패 처리한다.
     //
-    // ⏱️ 각 시도(직접/GET 프록시/POST 프록시)마다 최대 TEXT_FETCH_TIMEOUT_MS(8초)만 기다린다.
-    // 응답 없는(hang) 소스 하나 때문에 loadAllSources()의 Promise.allSettled 전체가 늦게
-    // 끝나서 카테고리탭 진입 시 채널 목록이 늦게 뜨는 문제를 막기 위함이다.
-    async function fetchTextWithCorsFallback(url) {
+    // ⏱️ 각 시도(직접/GET 프록시/POST 프록시)마다 최대 timeoutMs(기본 8초, EPG는 30초)만
+    // 기다린다. 응답 없는(hang) 소스 하나 때문에 loadAllSources()의 Promise.allSettled
+    // 전체가 늦게 끝나서 카테고리탭 진입 시 채널 목록이 늦게 뜨는 문제를 막기 위함이다.
+    async function fetchTextWithCorsFallback(url, timeoutMs) {
+        timeoutMs = timeoutMs || TEXT_FETCH_TIMEOUT_MS;
         try {
-            const res = await fetchWithTimeout(url, undefined, TEXT_FETCH_TIMEOUT_MS);
+            const res = await fetchWithTimeout(url, undefined, timeoutMs);
             if (res.ok) return await res.text();
         } catch (e) {
             console.warn(`[M3UPlayer] Direct fetch failed for ${url}, trying core proxy (getProxyUrl)...`);
@@ -847,7 +860,7 @@
         let getStatus = null;
         let getErrBody = null;
         try {
-            const res = await fetchWithTimeout(proxyUrl, undefined, TEXT_FETCH_TIMEOUT_MS);
+            const res = await fetchWithTimeout(proxyUrl, undefined, timeoutMs);
             if (res.ok) return await res.text();
             getStatus = res.status;
             getErrBody = await res.json().catch(() => null);
@@ -863,7 +876,7 @@
 
         // 2차: POST 릴레이 (최후 수단)
         console.warn(`[M3UPlayer] GET 프록시 실패(status=${getStatus}), POST 릴레이로 재시도합니다: ${url}`);
-        const postRes = await fetchWithTimeout(proxyUrl, { method: 'POST' }, TEXT_FETCH_TIMEOUT_MS);
+        const postRes = await fetchWithTimeout(proxyUrl, { method: 'POST' }, timeoutMs);
         if (postRes.ok) return await postRes.text();
         const postErrBody = await postRes.json().catch(() => null);
         throw new Error((postErrBody && postErrBody.message) || `HTTP ${postRes.status}`);
@@ -1012,8 +1025,15 @@
 
     async function loadEPGFile(url, sourceName) {
         try {
-            const xmlText = await fetchTextWithCorsFallback(url);
-            parseXMLTV(xmlText);
+            // EPG는 M3U보다 훨씬 커질 수 있어 별도의 넉넉한 타임아웃(EPG_FETCH_TIMEOUT_MS)을 쓴다.
+            const xmlText = await fetchTextWithCorsFallback(url, EPG_FETCH_TIMEOUT_MS);
+            const count = parseXMLTV(xmlText);
+            if (count === 0) {
+                // 파싱은 됐지만(예외 없음) 실제로 담긴 programme이 0건이면, 사용자 입장에서는
+                // "EPG가 안 된다"와 똑같은 상황이다 — 성공으로 잘못 세지 않도록 실패 처리한다.
+                console.warn(`[M3UPlayer] EPG 파싱 결과 0건 (${sourceName}): ${url}`);
+                return false;
+            }
             return true;
         } catch (e) {
             console.error(`[M3UPlayer] EPG 로드 실패 (${sourceName}):`, e.message);
@@ -1307,6 +1327,18 @@
     function parseXMLTV(xmlText) {
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+
+        // ⚠️ 버그 수정: DOMParser는 XML이 깨져도 예외를 던지지 않고, 대신 문서 안에
+        // <parsererror> 엘리먼트를 심어서 돌려준다. 예전에는 이걸 확인하지 않아서
+        // 응답이 잘렸거나(타임아웃/용량 캡) HTML 에러 페이지가 대신 왔거나 해도
+        // parseXMLTV()가 "성공"한 것처럼 조용히 통과되고, 편성표만 텅 빈 채로
+        // loadEPGFile()이 true(성공)를 반환해 "EPG 적용됨"이라고 잘못 표시되는
+        // 문제가 있었다. 명시적으로 감지해서 던진다.
+        const parserError = xmlDoc.getElementsByTagName('parsererror')[0];
+        if (parserError) {
+            throw new Error('XML 파싱 실패 (응답이 잘렸거나 형식이 올바르지 않습니다): ' + parserError.textContent.slice(0, 200));
+        }
+
         const programmes = xmlDoc.getElementsByTagName('programme');
 
         for (let i = 0; i < programmes.length; i++) {
@@ -1329,6 +1361,12 @@
         for (const k in epgProgrammes) {
             epgProgrammes[k].sort((a, b) => a.start - b.start);
         }
+
+        if (programmes.length === 0) {
+            console.warn('[M3UPlayer] XMLTV 응답에서 <programme> 항목을 하나도 찾지 못했습니다 (형식이 다르거나 빈 파일일 수 있음).');
+        }
+
+        return programmes.length;
     }
 
     // XMLTV 날짜 파싱: "YYYYMMDDHHMMSS" 뒤에 옵션으로 "+HHMM"/"-HHMM" 타임존 오프셋이 붙을 수 있음.
