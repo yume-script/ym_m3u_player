@@ -103,7 +103,14 @@
 /* 하단 카드 */
 .m3u-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    /* ⚠️ 버그 수정: 기존 rgba(0,0,0,0.7)은 완전 불투명이 아니라서, 채널 전환 시 이전
+       채널의 마지막 프레임이 오버레이 뒤로 살짝 비쳐 보이다가(화면이 바로 나오는 것처럼
+       보임) videoEl.load()로 리셋되며 완전히 까매지고, 새 스트림이 붙으면서 다시 화면이
+       나오는 "표시→블랙아웃→표시" 3단계가 그대로 눈에 보이는 문제가 있었다. 오버레이가
+       떠 있는 동안은(로딩/실패 안내 등 어떤 경우든) 이전 화면이 전혀 비치지 않도록
+       완전 불투명한 배경으로 바꾼다.
+    */
+    background: #05070d;
     display: flex; flex-direction: column; align-items: center; justify-content: center; color: #ffffff;
     pointer-events: none; z-index: 10;
 }
