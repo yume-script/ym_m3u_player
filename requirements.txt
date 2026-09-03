@@ -7,4 +7,4 @@
 # 오래되면 "Failed to parse JSON" 같은 에러로 검색/재생이 실패할 수 있으므로
 # 최소 버전을 최대한 최근 것으로 지정한다(이 파일을 검토한 시점 기준 최신 안정
 # 릴리즈: https://github.com/yt-dlp/yt-dlp/releases 에서 확인 가능).
-yt-dlp>=2026.8.19
+yt-dlp>=2026.8.1
