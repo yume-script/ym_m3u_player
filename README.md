@@ -134,9 +134,18 @@ plugins/data/ym_m3u_player/           # 데이터 (재설치·이전해도 보�
 | 소스 이름 | M3U URL | EPG(편성표) URL | 설명 |
 |---|---|---|---|
 | 개인 (Allive 등) | `http://내개인서버/alive/api/m3uall?apikey=...` | `http://내개인서버/myepg/api/epgall?apikey=...` | 개인 NAS/서버 구축 M3U |
-| 한국 공개 (iptv-org) | `https://iptv-org.github.io/iptv/countries/kr.m3u` | `https://iptv-org.github.io/epg/guides/kr.xml` | 국내 공공/무료 오픈소스 방송 |
+| 한국 공개 (iptv-org) | `https://iptv-org.github.io/iptv/countries/kr.m3u` | ⚠️ 아래 참고 | 국내 공공/무료 오픈소스 방송 |
 | 삼성 TV 플러스 (FAST) | `https://raw.githubusercontent.com/iptv-org/iptv/master/streams/kr_samsung.m3u` | - | 무료 FAST 채널 모음 |
 | 글로벌 뉴스 | `https://iptv-org.github.io/iptv/categories/news.m3u` | - | 전 세계 실시간 뉴스 채널 |
+
+> ⚠️ **iptv-org EPG(`iptv-org.github.io/epg/guides/*.xml`)는 더 이상 쓸 수 없습니다.**
+> `iptv-org/epg` 저장소가 GitHub Actions 실행 중단으로 사전빌드 가이드 파일 제공을 완전히
+> 중단했습니다("We are no longer able to provide pre-made guides due to the disabling of
+> GitHub Actions" — 저장소 공식 안내). 그 결과 `guides/kr.xml`을 포함해 이 경로의 모든 EPG
+> 파일이 404를 반환합니다. M3U 재생목록(`iptv-org/iptv` 저장소, 별개)은 영향받지 않아
+> 계속 정상 동작합니다. EPG가 꼭 필요하면 개인 IPTV 패널이 제공하는 EPG 주소를 쓰거나,
+> [iptv-org/epg](https://github.com/iptv-org/epg) 저장소를 직접 클론해 `npm run grab`으로
+> 가이드를 스스로 생성/호스팅해야 합니다.
 
 ## ⌨️ 조작 가이드 및 단축키
 

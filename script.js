@@ -348,8 +348,15 @@
     // /api/webview/logo-cache는 화이트리스트 등록이 필요 없고(위험도가 낮은 이미지 전용),
     // 서버가 URL당 최초 1회만 원본을 받아 WebP로 변환해 로컬 캐싱한 뒤 그대로 서빙한다.
     // mixed-content(https 페이지에서 http 이미지)나 로고 도메인의 hotlink 차단도 함께 우회된다.
+    //
+    // ⚠️ 개선: renderFilteredChannels()는 헬스체크/EPG 갱신 등으로 채널 목록을 자주 다시
+    // 그리는데, 그때마다 같은 <img>가 새로 만들어져 이미 죽은 걸로 확인된 로고 URL도 서버에
+    // 매번 다시 요청하고 있었다(콘솔에 logo-cache 502가 반복 출력되는 원인). 한 번 실패한
+    // 원본 URL은 이 세션 동안 기억해뒀다가, 재요청 없이 바로 대체 아이콘으로 넘어간다.
+    const knownBadLogoUrls = new Set();
+
     function logoCacheUrl(rawUrl) {
-        if (!rawUrl) return '';
+        if (!rawUrl || knownBadLogoUrls.has(rawUrl)) return '';
         return `/api/webview/logo-cache?url=${encodeURIComponent(rawUrl)}`;
     }
 
@@ -1535,13 +1542,17 @@
 
             const logoBox = document.createElement('div');
             logoBox.className = 'm3u-logo-box';
-            if (ch.logo) {
+            const logoUrl = ch.logo ? logoCacheUrl(ch.logo) : '';
+            if (logoUrl) {
                 const img = document.createElement('img');
                 img.className = 'm3u-ch-logo';
                 // 방송사 로고는 도메인이 제각각이라 로컬 캐시 프록시(/api/webview/logo-cache)를 경유한다
-                img.src = logoCacheUrl(ch.logo);
+                img.src = logoUrl;
                 img.loading = 'lazy';
-                img.onerror = () => { logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>'; };
+                img.onerror = () => {
+                    knownBadLogoUrls.add(ch.logo); // 다음 재렌더링부터는 이 URL로 다시 요청하지 않는다
+                    logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>';
+                };
                 logoBox.appendChild(img);
             } else {
                 logoBox.innerHTML = '<i class="fa-solid fa-tv m3u-fallback-icon"></i>';
@@ -1635,9 +1646,15 @@
 
         osdChannelName.textContent = channel.name;
         osdGroupName.textContent = channel.group || 'Live';
-        if (channel.logo) {
+        const osdLogoUrl = channel.logo ? logoCacheUrl(channel.logo) : '';
+        if (osdLogoUrl) {
             // 방송사 로고는 도메인이 제각각이라 로컬 캐시 프록시(/api/webview/logo-cache)를 경유한다
-            osdLogoEl.src = logoCacheUrl(channel.logo);
+            osdLogoEl.src = osdLogoUrl;
+            osdLogoEl.onerror = () => {
+                knownBadLogoUrls.add(channel.logo);
+                osdLogoEl.style.display = 'none';
+                osdFallbackIcon.style.display = 'block';
+            };
             osdLogoEl.style.display = 'block';
             osdFallbackIcon.style.display = 'none';
         } else {

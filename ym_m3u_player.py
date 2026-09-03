@@ -133,7 +133,12 @@ DEFAULT_SLOTS = [
         "enabled": False,
         "name": "iptv-org",
         "m3u": "https://iptv-org.github.io/iptv/countries/kr.m3u",
-        "epg": "https://iptv-org.github.io/epg/guides/kr.xml",
+        # ⚠️ iptv-org/epg 저장소가 GitHub Actions 실행이 중단되면서 사전빌드 가이드 파일
+        # 제공을 완전히 중단했다("We are no longer able to provide pre-made guides due to
+        # the disabling of GitHub Actions" - 저장소 공식 안내, 2026-09 기준). 그 결과
+        # https://iptv-org.github.io/epg/guides/*.xml 계열 URL은 전부 404가 나므로 기본값을
+        # 비워둔다. M3U 재생목록(iptv-org/iptv 저장소, 별개)은 이 영향을 받지 않아 그대로 둔다.
+        "epg": "",
     },
     {"enabled": False, "name": "FAST", "m3u": "", "epg": ""},
     {"enabled": False, "name": "세트 4", "m3u": "", "epg": ""},
@@ -167,7 +172,7 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         {"key": "ENABLE_2", "label": "[세트 2] 활성화", "type": "checkbox", "default": False},
         {"key": "NAME_2", "label": "[세트 2] 이름/태그", "type": "text", "default": "iptv-org"},
         {"key": "M3U_2", "label": "[세트 2] M3U URL", "type": "text", "default": "https://iptv-org.github.io/iptv/countries/kr.m3u"},
-        {"key": "EPG_2", "label": "[세트 2] EPG URL", "type": "text", "default": "https://iptv-org.github.io/epg/guides/kr.xml"},
+        {"key": "EPG_2", "label": "[세트 2] EPG URL", "type": "text", "default": ""},
 
         # Set 3
         {"key": "ENABLE_3", "label": "[세트 3] 활성화", "type": "checkbox", "default": False},
