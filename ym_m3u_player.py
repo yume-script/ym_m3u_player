@@ -265,6 +265,7 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         """run_once(extra_ydl_opts) -> 결과를 반환하는 콜백을 여러 player_client
         후보로 순차 시도한다. 첫 성공을 반환하고, 전부 실패하면 마지막 에러를
         사람이 읽을 수 있는 한국어 안내로 감싸서 반환한다."""
+        attempts_log = []  # 각 클라이언트에서 실제로 어떤 예외가 났는지 전부 기록해둔다 (디버깅용)
         last_error = None
         for client in self._YTDLP_CLIENT_CANDIDATES:
             extra_opts = {
@@ -276,32 +277,47 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
                 return run_once(extra_opts), None
             except Exception as e:  # yt-dlp는 다양한 자체 예외를 던지므로 광범위하게 처리
                 last_error = e
+                attempts_log.append(f"{client}: {type(e).__name__}: {e}")
                 continue
 
-        return None, self._friendly_ytdlp_error(last_error)
+        return None, self._friendly_ytdlp_error(last_error, attempts_log)
 
     @staticmethod
-    def _friendly_ytdlp_error(exc):
-        """yt-dlp 예외를 사람이 읽을 수 있는 한국어 안내로 정리한다."""
+    def _friendly_ytdlp_error(exc, attempts_log=None):
+        """yt-dlp 예외를 사람이 읽을 수 있는 한국어 안내로 정리한다.
+
+        🔧 임시 디버깅 조치: 지금까지 docker exec로 직접 재현한 테스트는 전부 성공했는데
+        실제 플러그인 실행(별도 샌드박스로 동작)에서는 계속 같은 카테고리 에러가 나서,
+        원인이 우리가 접근할 수 없는 실행 환경 자체에 있는 것으로 보인다. 그래서 사람이
+        읽는 안내 문구 뒤에 실제 클라이언트별 원본 예외들을 [디버그] 섹션으로 그대로
+        덧붙인다 — 화면에 뜨는 이 원본 정보로 진짜 원인을 좁힐 수 있다. 원인이 확인되면
+        이 디버그 섹션은 다시 제거하면 된다.
+        """
         msg = str(exc or "").strip() or "알 수 없는 오류"
         lowered = msg.lower()
         if "expecting value" in lowered or "failed to parse json" in lowered or "jsondecodeerror" in lowered:
-            return (
+            friendly = (
                 "유튜브가 이 서버 IP의 요청을 막았거나(빈 응답/차단), 서버의 yt-dlp가 오래됐을 "
                 "수 있습니다. 관리자에게 yt-dlp를 최신 버전으로 올려달라고 요청해주세요. "
                 "잠시 후 다시 시도하면 될 수도 있습니다."
             )
-        if "no supported javascript runtime" in lowered or "js runtime" in lowered:
-            return (
+        elif "no supported javascript runtime" in lowered or "js runtime" in lowered:
+            friendly = (
                 "이 서버에 유튜브 처리에 필요한 JavaScript 런타임(Deno 등)이 없습니다. "
                 "관리자에게 https://github.com/yt-dlp/yt-dlp/wiki/EJS 참고해 Deno 설치를 "
                 "요청해주세요."
             )
-        if "sign in to confirm" in lowered or "not a bot" in lowered:
-            return "유튜브가 봇 확인을 요구하고 있어 이 서버에서는 추출이 막혔습니다."
-        if "429" in msg or "too many requests" in lowered:
-            return "유튜브 요청이 일시적으로 제한됐습니다(429). 잠시 후 다시 시도하세요."
-        return f"유튜브 처리 실패: {msg}"
+        elif "sign in to confirm" in lowered or "not a bot" in lowered:
+            friendly = "유튜브가 봇 확인을 요구하고 있어 이 서버에서는 추출이 막혔습니다."
+        elif "429" in msg or "too many requests" in lowered:
+            friendly = "유튜브 요청이 일시적으로 제한됐습니다(429). 잠시 후 다시 시도하세요."
+        else:
+            friendly = f"유튜브 처리 실패: {msg}"
+
+        if attempts_log:
+            debug_block = " | ".join(attempts_log)
+            friendly = f"{friendly}\n\n[디버그] {debug_block}"
+        return friendly
 
     def _run_ytdlp_search(self, query, limit=15):
         """ytsearchN:검색어 표현으로 유튜브 검색 결과 메타데이터만 빠르게 가져온다
@@ -589,4 +605,52 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
                 return False, f"저장 실패: {e}"
             return True, f"유튜브 선택 목록 {len(picks)}건이 저장되었습니다."
 
+        if action == "debug_ytdlp_env":
+            # 🔧 임시 디버깅 전용 액션. docker exec로는 이 플러그인이 실제로 돌아가는
+            # 실행 환경(샌드박스)에 접근이 안 돼서, 코드 안에서 직접 sys.path/yt_dlp
+            # 로드 위치/네트워크 상태를 확인해 돌려준다. 원인이 확인되면 이 액션과
+            # 관련 코드는 제거해도 된다.
+            return True, json.dumps(self._debug_ytdlp_env(), ensure_ascii=False)
+
         return False, "카테고리 뷰 전용 플레이어 플러그인입니다."
+
+    def _debug_ytdlp_env(self):
+        import sys
+        result = {"sys_path": sys.path[:20]}  # 너무 길어지지 않게 앞 20개만
+
+        yt_dlp, err = self._import_yt_dlp()
+        if err:
+            result["yt_dlp_import_error"] = err
+        else:
+            result["yt_dlp_file"] = getattr(yt_dlp, "__file__", None)
+            try:
+                result["yt_dlp_version"] = yt_dlp.version.__version__
+            except Exception as e:
+                result["yt_dlp_version_error"] = str(e)
+
+        # 프록시 관련 환경변수 (샌드박스가 강제로 프록시를 태우고 있는지 확인용)
+        import os
+        result["proxy_env"] = {
+            k: os.environ.get(k)
+            for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
+            if os.environ.get(k)
+        }
+
+        # 이 실행 환경에서 실제로 유튜브에 raw HTTP 요청을 보내면 뭐가 돌아오는지 확인
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://www.youtube.com/",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read(300)
+                result["youtube_direct_request"] = {
+                    "status": resp.status,
+                    "body_preview": body.decode("utf-8", errors="replace"),
+                }
+        except Exception as e:
+            result["youtube_direct_request_error"] = f"{type(e).__name__}: {e}"
+
+        return result
+
