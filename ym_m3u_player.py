@@ -204,15 +204,8 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
     # 불러온다 — 설치 전이거나 실패해도 플러그인의 다른 기능(M3U 재생 등)은
     # 영향받지 않고, 이 기능을 실제로 쓸 때만 에러 메시지로 안내한다.
     #
-    # 아래 클라이언트 선정/헤더/타임아웃 값들은 이 서버에서 이미 안정적으로 쓰이고 있는
-    # 다른 플러그인의 yt-dlp 연동(ytdlp_library.py)을 참고해 맞췄다 — 안드로이드 계열
-    # 클라이언트를 우선하고 웹 클라이언트를 마지막 폴백으로 두는 순서, 모바일 UA 명시,
-    # 넉넉한 타임아웃 등은 데이터센터/도커 환경에서 유튜브의 봇 감지를 우회하는 데
-    # 실전에서 효과가 있었던 조합이다.
-    _YTDLP_USER_AGENT = (
-        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.6099.230 Mobile Safari/537.36"
-    )
+    # 아래 클라이언트 선정 순서(android 계열 우선, web은 마지막 폴백)는 이 서버에서
+    # 이미 안정적으로 쓰이고 있는 다른 플러그인의 yt-dlp 연동을 참고해 맞췄다.
 
     @staticmethod
     def _import_yt_dlp():
@@ -231,7 +224,7 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
 
     @classmethod
     def _base_ydl_opts(cls):
-        # ⚠️ 버그 수정: 여기 noplaylist: True를 공통으로 넣어뒀었는데, ytsearchN:검색어
+        # ⚠️ 버그 수정 1: 여기 noplaylist: True를 공통으로 넣어뒀었는데, ytsearchN:검색어
         # 표현은 yt-dlp 내부적으로 "재생목록(playlist)"으로 취급되는 요청이라
         # (디버그 로그: "Downloading playlist: ..." / "Playlist ...: Downloading N items")
         # noplaylist를 켜두면 검색 자체가 정상적으로 처리되지 않아 응답이 깨지고
@@ -239,12 +232,19 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         # noplaylist는 "단일 영상 URL을 resolve할 때 혹시 그 URL에 list= 파라미터가
         # 섞여 있어도 재생목록 전체를 긁지 않는다"는 의도였으므로, 검색이 아니라
         # _run_ytdlp_resolve() 쪽에만 개별적으로 추가한다.
+        #
+        # ⚠️ 버그 수정 2: 여기 http_headers로 커스텀 User-Agent(크롬 모바일 브라우저 UA)를
+        # 강제로 덮어씌우고 있었다. player_client를 'android'로 지정하면 yt-dlp가 내부적으로
+        # "안드로이드 유튜브 앱"인 것처럼 보이도록 자체 헤더 조합을 구성하는데, 여기서 UA를
+        # 브라우저 값으로 덮어써버리면 그 내부 로직과 어긋나 요청 형식이 깨지고 동일한 JSON
+        # 파싱 에러로 이어질 수 있다(실제로 이 UA 없이 서버에서 직접 돌린 진단 테스트는
+        # 성공했다). 그래서 커스텀 헤더는 완전히 제거하고 yt-dlp가 클라이언트별로 알아서
+        # 올바른 헤더를 구성하도록 맡긴다.
         return {
             "quiet": True,
             "no_warnings": True,
             "retries": 2,
             "socket_timeout": 20,
-            "http_headers": {"User-Agent": cls._YTDLP_USER_AGENT},
         }
 
     # 2025년 말부터 yt-dlp는 유튜브의 'web' 클라이언트 기준으로는 서명 해독을 위해
