@@ -196,13 +196,6 @@
         detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
         ensureExternalLibsLoaded(); // hls.js/mpegts.js를 최대한 일찍 미리 로드 시작 (아래 M3U/EPG 로딩과 병렬)
 
-        // 🚧 유튜브 검색 기능은 현재 서버 환경(yt-dlp/유튜브 쪽 이슈)에서 검색이 안 되는
-        // 상태라 임시로 버튼을 막아둔다. 기능 코드 자체는 그대로 두었으니, 문제가 해결되면
-        // 이 3줄만 지우면 다시 켤 수 있다.
-        openYoutubeModalBtn.disabled = true;
-        openYoutubeModalBtn.title = '유튜브 검색은 현재 일시적으로 사용할 수 없습니다.';
-        openYoutubeModalBtn.classList.add('m3u-disabled-hint');
-
         if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(updateLiveProgress, 1000);
 
