@@ -231,10 +231,17 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
 
     @classmethod
     def _base_ydl_opts(cls):
+        # ⚠️ 버그 수정: 여기 noplaylist: True를 공통으로 넣어뒀었는데, ytsearchN:검색어
+        # 표현은 yt-dlp 내부적으로 "재생목록(playlist)"으로 취급되는 요청이라
+        # (디버그 로그: "Downloading playlist: ..." / "Playlist ...: Downloading N items")
+        # noplaylist를 켜두면 검색 자체가 정상적으로 처리되지 않아 응답이 깨지고
+        # ("Expecting value" JSON 파싱 에러) 검색이 항상 실패하는 원인이 됐다.
+        # noplaylist는 "단일 영상 URL을 resolve할 때 혹시 그 URL에 list= 파라미터가
+        # 섞여 있어도 재생목록 전체를 긁지 않는다"는 의도였으므로, 검색이 아니라
+        # _run_ytdlp_resolve() 쪽에만 개별적으로 추가한다.
         return {
             "quiet": True,
             "no_warnings": True,
-            "noplaylist": True,  # 검색/재생 대상은 항상 단일 영상 — 실수로 재생목록 전체를 긁지 않는다
             "retries": 2,
             "socket_timeout": 20,
             "http_headers": {"User-Agent": cls._YTDLP_USER_AGENT},
@@ -352,6 +359,7 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
             ydl_opts.update({
                 "skip_download": True,
                 "format": "best[protocol*=m3u8]/best",
+                "noplaylist": True,  # 단일 영상만 - list= 파라미터가 섞여 있어도 재생목록 전체를 긁지 않는다
             })
             ydl_opts.update(extra_opts)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
