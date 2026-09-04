@@ -233,14 +233,19 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
         # 섞여 있어도 재생목록 전체를 긁지 않는다"는 의도였으므로, 검색이 아니라
         # _run_ytdlp_resolve() 쪽에만 개별적으로 추가한다.
         #
-        # ⚠️ 버그 수정 2: 여기 http_headers로 커스텀 User-Agent(크롬 모바일 브라우저 UA)를
-        # 강제로 덮어씌우고 있었다. player_client를 'android'로 지정하면 yt-dlp가 내부적으로
-        # "안드로이드 유튜브 앱"인 것처럼 보이도록 자체 헤더 조합을 구성하는데, 여기서 UA를
-        # 브라우저 값으로 덮어써버리면 그 내부 로직과 어긋나 요청 형식이 깨지고 동일한 JSON
-        # 파싱 에러로 이어질 수 있다(실제로 이 UA 없이 서버에서 직접 돌린 진단 테스트는
-        # 성공했다). 그래서 커스텀 헤더는 완전히 제거하고 yt-dlp가 클라이언트별로 알아서
-        # 올바른 헤더를 구성하도록 맡긴다.
+        # ⚠️ 버그 수정 2 (제거됨): http_headers로 커스텀 User-Agent를 강제 덮어씌웠던 적이
+        # 있었는데, 그건 원인이 아니었던 것으로 확인됐다(제거해도 동일하게 실패).
+        #
+        # ⚠️ 진짜 원인 (실서버 트래픽 덤프로 확인): 이 서버의 플러그인 격리 환경(libs/ 폴더에
+        # pip install --target으로 설치된 requests/urllib3 조합)이 유튜브 응답의
+        # `Content-Encoding: br`(Brotli 압축)을 제대로 해제하지 못해서, 응답 바이트는
+        # 정상(예: 34KB)인데 디코딩 결과가 빈 문자열이 되어 "Expecting value" JSON 파싱
+        # 에러로 이어지고 있었다. Accept-Encoding에서 br을 빼고 gzip/deflate만 받도록
+        # 요청하면 서버가 애초에 Brotli로 압축해서 보내지 않아 이 문제를 피할 수 있다.
+        # User-Agent 등 다른 헤더는 건드리지 않는다(클라이언트별 내부 헤더 구성과
+        # 충돌하지 않도록).
         return {
+            "http_headers": {"Accept-Encoding": "gzip, deflate"},
             "quiet": True,
             "no_warnings": True,
             "retries": 2,

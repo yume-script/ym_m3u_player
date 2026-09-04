@@ -213,9 +213,16 @@ plugins/data/ym_m3u_player/           # 데이터 (재설치·이전해도 보�
   보호 로직이 바뀌면 언제든 특정 영상(또는 전체)의 재생 URL 추출이 실패할 수 있고, 이는
   플러그인 코드를 고쳐서 해결할 수 있는 문제가 아니라 `yt-dlp` 자체의 업데이트를 기다려야
   하는 경우가 많습니다. 검색/저장은 정상 동작해도 재생 시점에만 실패할 수 있습니다.
-  - `"Failed to parse JSON"` / `"Expecting value"` 류의 에러가 계속 뜨면 서버의 `yt-dlp`가
-    오래됐을 가능성이 큽니다 — `requirements.txt`의 최소 버전을 최신으로 올리고 플러그인을
-    재설치/재시작해보세요.
+  - `"Failed to parse JSON"` / `"Expecting value"` 류의 에러가 계속 뜨면, 서버의 `yt-dlp`가
+    오래됐을 수도 있지만(먼저 `requirements.txt`의 최소 버전을 최신으로 올리고 재설치/재시작해
+    보세요), **실제로 이 서버에서 재현/확인된 원인은 다른 데 있었습니다**: 플러그인 전용
+    격리 환경(`libs/` 폴더에 `pip install --target`으로 설치된 `requests`/`urllib3` 조합)이
+    유튜브 응답의 `Content-Encoding: br`(Brotli 압축)을 제대로 해제하지 못해서, 응답 자체는
+    정상(수십 KB)인데 디코딩 결과가 빈 문자열이 되어 JSON 파싱이 실패하는 경우였습니다.
+    이 플러그인은 `Accept-Encoding: gzip, deflate`로 Brotli를 아예 요청하지 않도록 이미
+    처리해뒀지만, 혹시 이 문제가 다시 나타나면 같은 원인일 가능성이 있습니다 — 이 서버의
+    `curl -v`나 yt-dlp의 `debug_printtraffic` 옵션으로 응답 헤더의 `Content-Encoding` 값과
+    `Content-Length`(0이 아닌지)를 직접 확인해보는 게 가장 빠른 진단 방법입니다.
   - 2025년 말부터 yt-dlp는 유튜브 `web` 클라이언트 기준 서명 해독에 별도 JavaScript
     런타임(Deno 등)을 요구합니다. 이 플러그인은 JS 런타임이 필요 없는 `android`/`android_vr`/`tv`
     클라이언트를 우선 시도하고 `web`은 마지막 폴백으로만 사용하도록 되어 있지만(이 서버에서 이미
