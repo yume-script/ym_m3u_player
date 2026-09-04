@@ -645,12 +645,41 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 body = resp.read(300)
-                result["youtube_direct_request"] = {
+                result["youtube_get_request"] = {
                     "status": resp.status,
                     "body_preview": body.decode("utf-8", errors="replace"),
                 }
         except Exception as e:
-            result["youtube_direct_request_error"] = f"{type(e).__name__}: {e}"
+            result["youtube_get_request_error"] = f"{type(e).__name__}: {e}"
+
+        # ⭐ 핵심 테스트: 검색이 실패하는 지점은 GET이 아니라 유튜브 내부 검색 API로 보내는
+        # POST + JSON 요청이다(디버그 로그의 "Downloading API JSON" 단계). GET은 되는데
+        # 이 POST만 이 샌드박스에서 막히거나 빈 응답이 오는지 여기서 직접 확인한다.
+        try:
+            import json as _json
+            import urllib.request
+            payload = _json.dumps({
+                "context": {"client": {"clientName": "ANDROID", "clientVersion": "19.09.37"}},
+                "query": "test",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+                data=payload,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read(300)
+                result["youtube_post_request"] = {
+                    "status": resp.status,
+                    "body_length": len(body),
+                    "body_preview": body.decode("utf-8", errors="replace"),
+                }
+        except Exception as e:
+            result["youtube_post_request_error"] = f"{type(e).__name__}: {e}"
 
         return result
 
