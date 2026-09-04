@@ -612,6 +612,13 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
             # 관련 코드는 제거해도 된다.
             return True, json.dumps(self._debug_ytdlp_env(), ensure_ascii=False)
 
+        if action == "debug_ytdlp_traffic":
+            # 🔧 임시 디버깅 전용 액션 2탄. GET은 되는데 POST(내가 직접 만든 요청)는 400을
+            # 정상적으로 받는 반면, yt-dlp의 진짜 검색 요청만 빈 응답(0바이트)을 받는 상황이
+            # 확인돼서, yt-dlp 자신의 트래픽 덤프 기능(debug_printtraffic)으로 실제 요청/
+            # 응답 원문을 그대로 캡처해서 돌려준다.
+            return True, json.dumps(self._debug_ytdlp_traffic(item_data.get("query") or "test"), ensure_ascii=False)
+
         return False, "카테고리 뷰 전용 플레이어 플러그인입니다."
 
     def _debug_ytdlp_env(self):
@@ -680,6 +687,48 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
                 }
         except Exception as e:
             result["youtube_post_request_error"] = f"{type(e).__name__}: {e}"
+
+        return result
+
+    def _debug_ytdlp_traffic(self, query):
+        """yt-dlp의 debug_printtraffic 기능으로 실제 검색 요청 시 오간 원문
+        요청/응답을 그대로 캡처해서 돌려준다. yt-dlp는 이 정보를 자체 로거로
+        stdout/stderr에 출력하므로, 그 출력을 가로채서 문자열로 모은다."""
+        yt_dlp, err = self._import_yt_dlp()
+        if err:
+            return {"import_error": err}
+
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        result = {}
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                ydl_opts = {
+                    "quiet": False,
+                    "no_warnings": False,
+                    "verbose": True,
+                    "debug_printtraffic": True,  # 실제 요청 헤더/바디, 응답 헤더/바디 원문을 로그로 출력
+                    "extract_flat": "in_playlist",
+                    "skip_download": True,
+                    "extractor_args": {
+                        "youtube": {"player_client": ["android"], "player_skip": ["configs"]}
+                    },
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.extract_info(f"ytsearch1:{query}", download=False)
+            result["outcome"] = "success"
+        except Exception as e:
+            result["outcome"] = "failed"
+            result["error"] = f"{type(e).__name__}: {e}"
+
+        captured = buf.getvalue()
+        # 너무 길어지지 않게: 앞부분(요청 헤더 구성 과정)과 뒷부분(실제 실패 지점 근처)을 모두 담는다.
+        if len(captured) > 6000:
+            result["captured_output"] = captured[:3000] + "\n...(중략)...\n" + captured[-3000:]
+        else:
+            result["captured_output"] = captured
 
         return result
 
