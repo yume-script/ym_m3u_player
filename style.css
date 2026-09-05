@@ -362,6 +362,15 @@
 }
 
 @media (max-width: 900px) {
-    .m3u-root { grid-template-columns: 1fr !important; grid-template-rows: 280px 1fr !important; }
+    /* ⚠️ 버그 수정: 기존엔 플레이어 영역(비디오 + 채널정보/EPG 카드) 전체를 280px
+       고정 높이로 눌러놨었다. 그 안에서 정보 카드(제목/EPG 진행바/다음 방송)가
+       공간을 차지하고 나면 정작 비디오 자체는 100px 안팎으로 쪼그라들었다.
+       비디오는 16:9 비율로 화면 너비에 맞춰 자연스럽게 커지도록 하고, 플레이어
+       영역 전체는 그 내용물 높이만큼만(auto) 차지하게 한 뒤, 남는 세로 공간을
+       채널 목록(사이드바)이 가져가도록 바꾼다. */
+    .m3u-root { grid-template-columns: 1fr !important; grid-template-rows: auto 1fr !important; }
+    .m3u-player-section { height: auto !important; }
+    .m3u-video-wrapper { flex: none !important; width: 100%; aspect-ratio: 16 / 9; max-height: 46vh; }
+    .m3u-sidebar-section { min-height: 0; }
     .m3u-tv-osd { bottom: 10px; left: 10px; right: 10px; padding: 0.5rem 0.75rem; }
 }

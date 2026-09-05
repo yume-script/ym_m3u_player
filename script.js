@@ -1115,7 +1115,8 @@
                 throw new Error((data && data.message) || '재생 가능한 스트림 주소를 찾지 못했습니다.');
             }
             const isTs = detectIsTs(data.stream_url);
-            attemptPlayUrl(channel, data.stream_url, false, token, isTs);
+            const isM3u8 = detectIsM3u8(data.stream_url);
+            attemptPlayUrl(channel, data.stream_url, false, token, isTs, isM3u8);
         } catch (e) {
             if (token !== playToken) return;
             setChannelStatus(channel, 'offline');
@@ -1738,26 +1739,48 @@
         // 문제가 있었다. 또한 인증 토큰이 붙은 원본 URL(예: stream.ts?token=...)도
         // endsWith('.ts')만으로는 놓칠 수 있어 쿼리스트링을 뗀 경로 부분만으로 판별한다.
         const isTs = detectIsTs(streamUrl);
-        attemptPlayUrl(channel, streamUrl, false, myToken, isTs);
+        const isM3u8 = detectIsM3u8(streamUrl);
+        attemptPlayUrl(channel, streamUrl, false, myToken, isTs, isM3u8);
         renderFilteredChannels();
     }
 
     // URL의 path 부분(쿼리스트링/해시 제외)만 보고 .ts 확장자인지, 또는
     // output=ts 같은 쿼리 파라미터로 TS 포맷을 명시하고 있는지 판별한다.
     // 프록시로 치환되기 전, 원본 스트림 URL에 대해서만 호출해야 한다.
-    function detectIsTs(rawUrl) {
-        let pathPart = rawUrl;
+    // URL의 path 부분(쿼리스트링/해시 제외)만 뽑아낸다. TS/HLS 포맷 판별에 공통으로 쓴다.
+    function extractUrlPath(rawUrl) {
         try {
             const u = new URL(rawUrl, window.location.href);
-            pathPart = u.pathname;
-            const outputParam = (u.searchParams.get('output') || '').toLowerCase();
-            if (outputParam === 'ts') return true;
+            return { pathname: u.pathname, searchParams: u.searchParams };
         } catch (e) {
             // URL 파싱 실패 시(상대경로 등) 원본 문자열 그대로 폴백
             const qIdx = rawUrl.indexOf('?');
-            pathPart = qIdx === -1 ? rawUrl : rawUrl.substring(0, qIdx);
+            return { pathname: qIdx === -1 ? rawUrl : rawUrl.substring(0, qIdx), searchParams: null };
         }
-        return pathPart.toLowerCase().endsWith('.ts');
+    }
+
+    function detectIsTs(rawUrl) {
+        const { pathname, searchParams } = extractUrlPath(rawUrl);
+        const outputParam = (searchParams && searchParams.get('output') || '').toLowerCase();
+        if (outputParam === 'ts') return true;
+        return pathname.toLowerCase().endsWith('.ts');
+    }
+
+    // ⚠️ 버그 수정: 예전에는 "TS가 아니면 무조건 HLS(hls.js)"로 재생을 시도했는데, 이게
+    // 실제 .m3u8 재생목록이 아니라 일반 진행형 mp4/webm 같은 단일 파일 URL일 때 문제를
+    // 일으켰다 — hls.js는 그 URL을 재생목록으로 보고 XHR로 fetch해서 파싱하려 드는데,
+    // 해당 서버(예: googlevideo.com)가 CORS 헤더를 안 주면 그 XHR 자체가 브라우저에서
+    // 차단된다(콘솔에 "blocked by CORS policy" + net::ERR_FAILED로 나타남). 특히 유튜브
+    // 채널 재생 시 yt-dlp가 항상 .m3u8을 주는 게 아니라 일반 mp4(itag=18 등) 진행형
+    // 파일을 줄 때가 있어서 이 경로로 자주 걸렸다. 이제 .m3u8인지 명시적으로 확인해서,
+    // 그게 아니면(TS도 아니고 m3u8도 아니면) hls.js를 거치지 않고 곧장 네이티브 <video
+    // src="..."> 재생(DIRECT)으로 보낸다 — DIRECT는 XHR/CORS 없이 브라우저가 알아서
+    // 스트리밍하므로 이런 단일 파일에 더 적합하고 안전하다.
+    function detectIsM3u8(rawUrl) {
+        const { pathname, searchParams } = extractUrlPath(rawUrl);
+        const outputParam = (searchParams && searchParams.get('output') || '').toLowerCase();
+        if (outputParam === 'm3u8' || outputParam === 'hls') return true;
+        return pathname.toLowerCase().endsWith('.m3u8');
     }
 
     // url: 실제로 재생을 시도할 URL (원본 또는 프록시로 치환된 URL)
@@ -1765,7 +1788,9 @@
     // token: 이 시도가 시작될 때의 playToken 스냅샷. 실행 중 playToken이 바뀌었다면(다른 채널로 전환됨)
     //        이 시도에서 파생된 모든 비동기 콜백은 아무 것도 하지 않고 조용히 무시한다.
     // isTs: 원본 URL 기준으로 미리 판별해둔 TS 포맷 여부 (playStream()/retryViaStreamProxy()에서 전달).
-    async function attemptPlayUrl(channel, url, isViaProxy, token, isTs) {
+    // isM3u8: 원본 URL 기준으로 미리 판별해둔 HLS(.m3u8) 포맷 여부. TS도 M3U8도 아니면
+    //         일반 단일 파일로 보고 네이티브 DIRECT 재생을 쓴다.
+    async function attemptPlayUrl(channel, url, isViaProxy, token, isTs, isM3u8) {
         if (token !== playToken) return; // 이미 낡은 시도라 시작조차 하지 않는다
 
         // hls.js/mpegts.js가 아직 로딩 중이면(카테고리탭 진입 직후 첫 재생 시도 등) 여기서
@@ -1790,7 +1815,7 @@
                 // 수행한다(아래 videoNeedsRecreate 참고) — 순서가 항상 보장된다.
                 videoNeedsRecreate = true;
             } else {
-                retryViaStreamProxy(channel, url, token, isTs);
+                retryViaStreamProxy(channel, url, token, isTs, isM3u8);
             }
         };
 
@@ -1839,7 +1864,7 @@
                 cleanupThisPlayer();
                 if (!isStale()) onFailure();
             }
-        } else if (window.Hls && window.Hls.isSupported()) {
+        } else if (isM3u8 && window.Hls && window.Hls.isSupported()) {
             engineBadgeEl.textContent = isViaProxy ? 'HLS (프록시)' : 'HLS';
             const thisHls = new window.Hls({ enableWorker: true, lowLatencyMode: true });
             hlsInstance = thisHls;
@@ -1884,7 +1909,7 @@
     // 참고: /api/webview/hls-proxy도 이제 GET 외에 POST(바디 릴레이)를 지원하지만, 이는
     // Widevine/PlayReady 같은 DASH DRM 라이선스 서버용이다. 이 플러그인은 DRM 없는 순수
     // HLS/MPEG-TS 채널만 다루므로 스트림 재생 경로에서는 항상 GET만 사용한다.
-    async function retryViaStreamProxy(channel, originalUrl, token, isTs) {
+    async function retryViaStreamProxy(channel, originalUrl, token, isTs, isM3u8) {
         if (token !== playToken) return; // 대기 중 다른 채널로 전환됐으면 아무 것도 하지 않는다
 
 
@@ -1908,8 +1933,8 @@
 
         // 프록시 URL(/api/webview/hls-proxy?url=...)은 인코딩된 원본 URL을 쿼리스트링에
         // 담고 있어 그 자체로는 포맷을 신뢰성 있게 판별할 수 없다. 원본 URL에서 이미
-        // 계산해둔 isTs 판정을 그대로 사용한다.
-        attemptPlayUrl(channel, proxyUrl, true, token, isTs);
+        // 계산해둔 isTs/isM3u8 판정을 그대로 사용한다.
+        attemptPlayUrl(channel, proxyUrl, true, token, isTs, isM3u8);
     }
 
     function openScheduleView() {
