@@ -1115,8 +1115,8 @@
                 throw new Error((data && data.message) || '재생 가능한 스트림 주소를 찾지 못했습니다.');
             }
             const isTs = detectIsTs(data.stream_url);
-            const isM3u8 = detectIsM3u8(data.stream_url);
-            attemptPlayUrl(channel, data.stream_url, false, token, isTs, isM3u8);
+            const isPlainVideoFile = detectIsPlainVideoFile(data.stream_url);
+            attemptPlayUrl(channel, data.stream_url, false, token, isTs, isPlainVideoFile);
         } catch (e) {
             if (token !== playToken) return;
             setChannelStatus(channel, 'offline');
@@ -1739,8 +1739,8 @@
         // 문제가 있었다. 또한 인증 토큰이 붙은 원본 URL(예: stream.ts?token=...)도
         // endsWith('.ts')만으로는 놓칠 수 있어 쿼리스트링을 뗀 경로 부분만으로 판별한다.
         const isTs = detectIsTs(streamUrl);
-        const isM3u8 = detectIsM3u8(streamUrl);
-        attemptPlayUrl(channel, streamUrl, false, myToken, isTs, isM3u8);
+        const isPlainVideoFile = detectIsPlainVideoFile(streamUrl);
+        attemptPlayUrl(channel, streamUrl, false, myToken, isTs, isPlainVideoFile);
         renderFilteredChannels();
     }
 
@@ -1766,21 +1766,27 @@
         return pathname.toLowerCase().endsWith('.ts');
     }
 
-    // ⚠️ 버그 수정: 예전에는 "TS가 아니면 무조건 HLS(hls.js)"로 재생을 시도했는데, 이게
-    // 실제 .m3u8 재생목록이 아니라 일반 진행형 mp4/webm 같은 단일 파일 URL일 때 문제를
+    // ⚠️ 버그 수정 (v1.6.0): 예전에는 "TS가 아니면 무조건 HLS(hls.js)"로 재생을 시도했는데,
+    // 이게 실제 .m3u8 재생목록이 아니라 일반 진행형 mp4/webm 같은 단일 파일 URL일 때 문제를
     // 일으켰다 — hls.js는 그 URL을 재생목록으로 보고 XHR로 fetch해서 파싱하려 드는데,
     // 해당 서버(예: googlevideo.com)가 CORS 헤더를 안 주면 그 XHR 자체가 브라우저에서
-    // 차단된다(콘솔에 "blocked by CORS policy" + net::ERR_FAILED로 나타남). 특히 유튜브
-    // 채널 재생 시 yt-dlp가 항상 .m3u8을 주는 게 아니라 일반 mp4(itag=18 등) 진행형
-    // 파일을 줄 때가 있어서 이 경로로 자주 걸렸다. 이제 .m3u8인지 명시적으로 확인해서,
-    // 그게 아니면(TS도 아니고 m3u8도 아니면) hls.js를 거치지 않고 곧장 네이티브 <video
-    // src="..."> 재생(DIRECT)으로 보낸다 — DIRECT는 XHR/CORS 없이 브라우저가 알아서
-    // 스트리밍하므로 이런 단일 파일에 더 적합하고 안전하다.
-    function detectIsM3u8(rawUrl) {
-        const { pathname, searchParams } = extractUrlPath(rawUrl);
-        const outputParam = (searchParams && searchParams.get('output') || '').toLowerCase();
-        if (outputParam === 'm3u8' || outputParam === 'hls') return true;
-        return pathname.toLowerCase().endsWith('.m3u8');
+    // 차단된다. 그래서 ".m3u8로 끝나야만 HLS, 그 외엔 전부 DIRECT"로 한 번 바꿨었다.
+    //
+    // ⚠️ 재수정 (v1.6.2): 그 조건이 반대로 너무 엄격해서, 실제로는 정상적인 HLS/TS
+    // 라이브 스트림인데 URL에 ".m3u8"이 그대로 노출되지 않는 경우(쿼리 파라미터 기반
+    // 스트리밍 API 등 흔한 케이스)까지 전부 DIRECT로 잘못 보내버리는 회귀가 생겼다.
+    // 네이티브 <video>가 이런 스트림을 짧게는 재생하다가(그래서 "화면이 잠깐 나옴")
+    // 곧 못 풀어서 멈추고(버퍼링/블랙아웃), onFailure → 프록시 재시도에서 우연히 다시
+    // 이어지는 패턴으로 나타났다("다시 불러오는" 것처럼 보임).
+    //
+    // 그래서 기준을 뒤집는다: "확실히 일반 동영상 파일(mp4/webm/mov 등 알려진 확장자)"
+    // 일 때만 DIRECT를 쓰고, 그 외(.m3u8은 물론, 확장자가 불분명한 애매한 URL도 포함)는
+    // 예전처럼 HLS.js를 기본으로 시도한다 — hls.js는 어차피 실제 .m3u8이 아니면 빠르게
+    // 실패하고 onFailure로 넘어가므로, 애매한 URL에 대해 "일단 HLS.js로 시도"가 더 안전한
+    // 기본값이다.
+    function detectIsPlainVideoFile(rawUrl) {
+        const { pathname } = extractUrlPath(rawUrl);
+        return /\.(mp4|m4v|webm|mov|mkv|3gp|ogg)$/i.test(pathname);
     }
 
     // url: 실제로 재생을 시도할 URL (원본 또는 프록시로 치환된 URL)
@@ -1788,9 +1794,9 @@
     // token: 이 시도가 시작될 때의 playToken 스냅샷. 실행 중 playToken이 바뀌었다면(다른 채널로 전환됨)
     //        이 시도에서 파생된 모든 비동기 콜백은 아무 것도 하지 않고 조용히 무시한다.
     // isTs: 원본 URL 기준으로 미리 판별해둔 TS 포맷 여부 (playStream()/retryViaStreamProxy()에서 전달).
-    // isM3u8: 원본 URL 기준으로 미리 판별해둔 HLS(.m3u8) 포맷 여부. TS도 M3U8도 아니면
-    //         일반 단일 파일로 보고 네이티브 DIRECT 재생을 쓴다.
-    async function attemptPlayUrl(channel, url, isViaProxy, token, isTs, isM3u8) {
+    // isPlainVideoFile: 원본 URL 기준으로 미리 판별해둔 "확실한 일반 동영상 파일" 여부.
+    //         TS도 아니고 이것도 아니면(.m3u8이든 애매한 URL이든) HLS.js를 기본으로 시도한다.
+    async function attemptPlayUrl(channel, url, isViaProxy, token, isTs, isPlainVideoFile) {
         if (token !== playToken) return; // 이미 낡은 시도라 시작조차 하지 않는다
 
         // hls.js/mpegts.js가 아직 로딩 중이면(카테고리탭 진입 직후 첫 재생 시도 등) 여기서
@@ -1815,7 +1821,7 @@
                 // 수행한다(아래 videoNeedsRecreate 참고) — 순서가 항상 보장된다.
                 videoNeedsRecreate = true;
             } else {
-                retryViaStreamProxy(channel, url, token, isTs, isM3u8);
+                retryViaStreamProxy(channel, url, token, isTs, isPlainVideoFile);
             }
         };
 
@@ -1864,7 +1870,7 @@
                 cleanupThisPlayer();
                 if (!isStale()) onFailure();
             }
-        } else if (isM3u8 && window.Hls && window.Hls.isSupported()) {
+        } else if (!isPlainVideoFile && window.Hls && window.Hls.isSupported()) {
             engineBadgeEl.textContent = isViaProxy ? 'HLS (프록시)' : 'HLS';
             const thisHls = new window.Hls({ enableWorker: true, lowLatencyMode: true });
             hlsInstance = thisHls;
@@ -1909,7 +1915,7 @@
     // 참고: /api/webview/hls-proxy도 이제 GET 외에 POST(바디 릴레이)를 지원하지만, 이는
     // Widevine/PlayReady 같은 DASH DRM 라이선스 서버용이다. 이 플러그인은 DRM 없는 순수
     // HLS/MPEG-TS 채널만 다루므로 스트림 재생 경로에서는 항상 GET만 사용한다.
-    async function retryViaStreamProxy(channel, originalUrl, token, isTs, isM3u8) {
+    async function retryViaStreamProxy(channel, originalUrl, token, isTs, isPlainVideoFile) {
         if (token !== playToken) return; // 대기 중 다른 채널로 전환됐으면 아무 것도 하지 않는다
 
 
@@ -1933,8 +1939,8 @@
 
         // 프록시 URL(/api/webview/hls-proxy?url=...)은 인코딩된 원본 URL을 쿼리스트링에
         // 담고 있어 그 자체로는 포맷을 신뢰성 있게 판별할 수 없다. 원본 URL에서 이미
-        // 계산해둔 isTs/isM3u8 판정을 그대로 사용한다.
-        attemptPlayUrl(channel, proxyUrl, true, token, isTs, isM3u8);
+        // 계산해둔 isTs/isPlainVideoFile 판정을 그대로 사용한다.
+        attemptPlayUrl(channel, proxyUrl, true, token, isTs, isPlainVideoFile);
     }
 
     function openScheduleView() {
