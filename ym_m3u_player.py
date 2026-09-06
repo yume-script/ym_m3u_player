@@ -154,7 +154,7 @@ class YM_M3UPlayerPlugin(BaseMetadataProvider):
     category_tab = {
         "title": "M3U 플레이어",
         "icon": "fa-solid fa-tv",
-        "order": 85,
+        "order": 19,
         "sessions": "all",
     }
 
