@@ -910,6 +910,7 @@
         activeSourcesBar.innerHTML = '';
         allChannels = [];
         epgProgrammes = {};
+        epgNameToId = {}; // 채널명→id 역인덱스도 새로고침할 때마다 함께 초기화
 
         const activeSlots = sourceSlots.filter(s => s.enabled && s.m3u && s.m3u.trim());
 
@@ -1325,6 +1326,17 @@
         return channels;
     }
 
+    // channel.id(tvg-id)로 EPG를 못 찾았을 때, 채널 표시명으로 대신 찾기 위한 보조 인덱스.
+    // key: 정규화된(공백 제거+소문자) EPG display-name, value: 그 이름에 매핑된 XMLTV channel id.
+    // parseXMLTV()가 <channel><display-name> 블록을 읽어서 채워준다.
+    let epgNameToId = {};
+
+    // 채널명을 비교 가능하게 정규화한다: 앞뒤 공백 제거, 모든 공백 제거, 소문자화.
+    // "MBC", "mbc", "MBC ", "M B C" 같은 표기 차이를 흡수하기 위함.
+    function normalizeChannelName(name) {
+        return String(name || '').replace(/\s+/g, '').toLowerCase();
+    }
+
     function parseXMLTV(xmlText) {
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
@@ -1338,6 +1350,26 @@
         const parserError = xmlDoc.getElementsByTagName('parsererror')[0];
         if (parserError) {
             throw new Error('XML 파싱 실패 (응답이 잘렸거나 형식이 올바르지 않습니다): ' + parserError.textContent.slice(0, 200));
+        }
+
+        // ⚠️ 버그 수정 2: M3U 항목에 tvg-id가 없으면(꽤 흔함) parseM3U()가 "소스명_채널명"
+        // 같은 임시 ID를 만드는데, 이건 XMLTV의 channel="..." 값(예: "82.wavve")과 절대
+        // 일치할 수 없어서 "EPG N개 적용됨"이라고 뜨는데도 개별 채널은 계속 "편성표 정보
+        // 없음"으로 남는 문제가 있었다. XMLTV는 보통 <programme>보다 앞에
+        // <channel id="..."><display-name>채널명</display-name></channel> 형태로
+        // ID↔채널명 매핑을 함께 제공하므로, 이걸 읽어서 "정규화된 채널명 → id" 역인덱스를
+        // 만들어둔다. getEPGInfo()가 tvg-id 매칭에 실패하면 이 인덱스로 채널명 매칭을
+        // 한 번 더 시도한다.
+        const channelEls = xmlDoc.getElementsByTagName('channel');
+        for (let i = 0; i < channelEls.length; i++) {
+            const chEl = channelEls[i];
+            const chId = chEl.getAttribute('id');
+            if (!chId) continue;
+            const displayNameEls = chEl.getElementsByTagName('display-name');
+            for (let j = 0; j < displayNameEls.length; j++) {
+                const dn = normalizeChannelName(displayNameEls[j].textContent);
+                if (dn && !epgNameToId[dn]) epgNameToId[dn] = chId;
+            }
         }
 
         const programmes = xmlDoc.getElementsByTagName('programme');
@@ -1390,9 +1422,19 @@
         return new Date(utcMs);
     }
 
+    // 채널의 EPG 목록을 찾는다: 1) tvg-id로 직접 매칭 → 2) 채널 표시명(대소문자/공백 무시)으로
+    // XMLTV의 <display-name> 매핑을 거쳐 매칭 → 3) 채널명을 id로 그대로 한 번 더 시도(과거 호환).
+    function findEpgListForChannel(channel) {
+        if (!channel) return [];
+        if (epgProgrammes[channel.id]) return epgProgrammes[channel.id];
+        const mappedId = epgNameToId[normalizeChannelName(channel.name)];
+        if (mappedId && epgProgrammes[mappedId]) return epgProgrammes[mappedId];
+        return epgProgrammes[channel.name] || [];
+    }
+
     function getEPGInfo(channel) {
         if (!channel) return { current: null, next: null, progress: 0, timeText: '', remainText: '' };
-        const list = epgProgrammes[channel.id] || epgProgrammes[channel.name] || [];
+        const list = findEpgListForChannel(channel);
         if (!list.length) return { current: null, next: null, progress: 0, timeText: '', remainText: '' };
 
         const now = new Date();
@@ -1948,7 +1990,7 @@
         scheduleTitleEl.textContent = `📺 ${activeChannel.name} 오늘의 편성표`;
         scheduleListEl.innerHTML = '';
 
-        const list = epgProgrammes[activeChannel.id] || epgProgrammes[activeChannel.name] || [];
+        const list = findEpgListForChannel(activeChannel);
         if (!list.length) {
             scheduleListEl.innerHTML = '<div class="m3u-empty-state">해당 채널의 편성표 데이터가 없습니다.</div>';
         } else {
