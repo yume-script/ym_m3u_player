@@ -166,6 +166,8 @@
     const currentFavIcon = document.getElementById('m3uCurrentFavIcon');
     const favCurrentBtn = document.getElementById('m3uFavCurrentBtn');
     const miniWindowBtn = document.getElementById('m3uMiniWindowBtn');
+    const sidebarToggleBtn = document.getElementById('m3uSidebarToggleBtn');
+    const m3uRootEl = document.querySelector('.m3u-root');
 
     // TV OSD Elements
     const tvOsdEl = document.getElementById('m3uTvOsd');
@@ -192,6 +194,7 @@
 
         bindEvents();
         updateMiniWindowButtonState();
+        try { applySidebarCollapsedState(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'); } catch (e) {}
         setupNavigationCleanupObserver();
         detectAdminAccess(); // 결과가 오는 대로 비동기로 버튼 상태를 갱신 (초기 렌더를 막지 않음)
         ensureExternalLibsLoaded(); // hls.js/mpegts.js를 최대한 일찍 미리 로드 시작 (아래 M3U/EPG 로딩과 병렬)
@@ -498,6 +501,7 @@
 
         favCurrentBtn.addEventListener('click', toggleCurrentFavorite);
         miniWindowBtn.addEventListener('click', toggleMiniWindow);
+        sidebarToggleBtn.addEventListener('click', toggleSidebarCollapsed);
         openScheduleBtn.addEventListener('click', openScheduleView);
         closeModalBtn.addEventListener('click', () => scheduleModal.classList.add('hidden'));
 
@@ -694,6 +698,24 @@
             ? '<i class="fa-solid fa-window-close"></i> 미니창 닫기'
             : '<i class="fa-solid fa-clone"></i> 미니창';
         miniWindowBtn.title = isOpen ? '미니창을 닫고 원래 화면으로 되돌리기' : '미니창(PIP)으로 분리해서 보기';
+    }
+
+    // 채널 목록(사이드바)을 접어서 영상 영역을 넓게 쓸 수 있게 하는 토글.
+    // 선택 상태는 브라우저에 저장해뒀다가 다음에 카테고리탭을 열 때도 그대로 유지한다.
+    const SIDEBAR_COLLAPSED_KEY = 'm3u_sidebar_collapsed';
+
+    function applySidebarCollapsedState(collapsed) {
+        if (!m3uRootEl) return;
+        m3uRootEl.classList.toggle('m3u-sidebar-collapsed', collapsed);
+        if (sidebarToggleBtn) {
+            sidebarToggleBtn.title = collapsed ? '채널 목록 펼치기' : '채널 목록 접기';
+        }
+    }
+
+    function toggleSidebarCollapsed() {
+        const collapsed = !m3uRootEl.classList.contains('m3u-sidebar-collapsed');
+        applySidebarCollapsedState(collapsed);
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (e) {}
     }
 
     // 소스 관리 모달 열기

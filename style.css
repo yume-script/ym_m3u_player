@@ -13,7 +13,37 @@
     color: var(--app-text-primary, #f8fafc);
     overflow: hidden !important;
     position: relative;
+    transition: grid-template-columns 0.25s ease;
 }
+
+/* 채널 목록 접기/펼치기 토글 버튼: 영상과 사이드바 경계에 떠 있다가, 접으면 오른쪽 끝으로
+   따라 붙는다. 좁은 화면(사이드바가 아래로 내려가는 레이아웃)에서는 의미가 없어 숨긴다. */
+.m3u-sidebar-toggle-btn {
+    position: absolute;
+    top: 1rem;
+    right: 380px;
+    transform: translateX(50%);
+    z-index: 50;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--app-border, rgba(255, 255, 255, 0.18));
+    background: var(--app-bg-card, #1e293b);
+    color: var(--app-text-primary, #f8fafc);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    transition: right 0.25s ease, transform 0.25s ease;
+}
+.m3u-sidebar-toggle-btn:hover { background: var(--app-bg-card-hover, #334155); }
+.m3u-sidebar-toggle-btn i { transition: transform 0.25s ease; }
+
+.m3u-root.m3u-sidebar-collapsed { grid-template-columns: 1fr 0px !important; }
+.m3u-root.m3u-sidebar-collapsed .m3u-sidebar-section { display: none !important; }
+.m3u-root.m3u-sidebar-collapsed .m3u-sidebar-toggle-btn { right: 0; }
+.m3u-root.m3u-sidebar-collapsed .m3u-sidebar-toggle-btn i { transform: rotate(180deg); }
 
 /* 좌측 플레이어 */
 .m3u-player-section {
@@ -373,4 +403,9 @@
     .m3u-video-wrapper { flex: none !important; width: 100%; aspect-ratio: 16 / 9; max-height: 46vh; }
     .m3u-sidebar-section { min-height: 0; }
     .m3u-tv-osd { bottom: 10px; left: 10px; right: 10px; padding: 0.5rem 0.75rem; }
+    /* 좁은 화면은 이미 사이드바가 아래로 내려가는 세로 레이아웃이라 "옆으로 접기"가
+       의미가 없다 - 토글 버튼을 숨기고, 접힘 상태였더라도 항상 펼쳐 보이게 한다. */
+    .m3u-sidebar-toggle-btn { display: none !important; }
+    .m3u-root.m3u-sidebar-collapsed { grid-template-rows: auto 1fr !important; }
+    .m3u-root.m3u-sidebar-collapsed .m3u-sidebar-section { display: flex !important; }
 }
